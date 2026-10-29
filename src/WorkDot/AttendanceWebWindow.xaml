@@ -5,7 +5,7 @@
         Title="WorkDot · 다우오피스 근태관리"
         Width="1120" Height="780"
         WindowStartupLocation="CenterScreen"
-        Background="#0F172A">
+        Background="#FFFFFF">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="50"/>
@@ -40,7 +40,7 @@
                               Margin="0,0,10,0"/>
 
                     <Button Content="🚫 설문/팝업 닫기" Click="OnDismissPopupsClick"
-                            ToolTip="화면을 가리는 설문조사·공지사항 레이어 팝업을 강제로 닫고 근태 페이지로 이동합니다"
+                            ToolTip="화면을 가리는 설문조사·공지사항 레이어 팝업을 닫고 근태 페이지로 이동합니다"
                             Background="#F59E0B" Foreground="#1E293B" FontWeight="Bold" BorderThickness="0"
                             Padding="10,6" Margin="0,0,6,0" Cursor="Hand"/>
 
@@ -65,7 +65,7 @@
             </DockPanel>
         </Border>
 
-        <!-- WebView2 -->
-        <wv2:WebView2 x:Name="PortalWebView" Grid.Row="1" DefaultBackgroundColor="#0F172A"/>
+        <!-- WebView2: 브라우저 기본 흰색 배경 유지 -->
+        <wv2:WebView2 x:Name="PortalWebView" Grid.Row="1" DefaultBackgroundColor="White"/>
     </Grid>
 </Window>

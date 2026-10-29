@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Windows;
 using WorkDot.Services;
 
@@ -6,30 +7,92 @@ namespace WorkDot;
 public partial class AttendanceWebWindow : Window
 {
     private readonly DaouAttendanceService _attendanceService;
+    private bool _isAppShuttingDown;
+    private bool _isWebViewInitialized;
 
     public AttendanceWebWindow(DaouAttendanceService attendanceService)
     {
         InitializeComponent();
         _attendanceService = attendanceService;
-        Loaded += OnLoaded;
+        Closing += OnWindowClosing;
     }
 
-    private async void OnLoaded(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// 앱 시작 시 화면에 보이지 않는 백그라운드 상태로 WebView2를 초기화합니다.
+    /// (MainWindow 내부에 WebView2를 두지 않아 Airspace 가림 문제를 원천 제거)
+    /// </summary>
+    public async Task InitializeInBackgroundAsync()
     {
-        var env = await _attendanceService.GetOrCreateEnvironmentAsync();
-        await PortalWebView.EnsureCoreWebView2Async(env);
+        if (_isWebViewInitialized)
+            return;
 
-        var core = PortalWebView.CoreWebView2;
+        ShowInTaskbar = false;
+        ShowActivated = false;
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Left = -32000;
+        Top = -32000;
+        Width = 1120;
+        Height = 780;
+        Opacity = 0;
 
-        // 포털 WebView에도 실시간 API/DOM 훅 및 설문/팝업 우회 가드 장착
-        await _attendanceService.AttachWebViewHooksAsync(core, isHiddenInstance: false);
+        Show();
+        await EnsureWebViewReadyAsync();
+        Hide();
+    }
 
-        core.SourceChanged += (_, _) =>
+    public async void ShowInteractive()
+    {
+        await EnsureWebViewReadyAsync();
+
+        Opacity = 1.0;
+        ShowInTaskbar = true;
+        ShowActivated = true;
+        if (Left < -1000 || Top < -1000)
         {
-            UrlText.Text = core.Source ?? string.Empty;
-        };
+            var workArea = SystemParameters.WorkArea;
+            Left = workArea.Left + (workArea.Width - Width) / 2;
+            Top = workArea.Top + (workArea.Height - Height) / 2;
+        }
 
-        PortalWebView.Source = new Uri(DaouAttendanceService.TargetAttendanceUrl);
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Show();
+        Activate();
+    }
+
+    public void ShutdownClose()
+    {
+        _isAppShuttingDown = true;
+        Close();
+    }
+
+    private async Task EnsureWebViewReadyAsync()
+    {
+        if (_isWebViewInitialized)
+            return;
+
+        _isWebViewInitialized = true;
+        await _attendanceService.InitializeWebViewAsync(PortalWebView);
+
+        PortalWebView.CoreWebView2.SourceChanged += (_, _) =>
+        {
+            UrlText.Text = PortalWebView.CoreWebView2.Source ?? string.Empty;
+        };
+    }
+
+    private void OnWindowClosing(object? sender, CancelEventArgs e)
+    {
+        if (_isAppShuttingDown)
+            return;
+
+        // 창을 닫아도 WebView2 세션과 백그라운드 동기화가 유지되도록 숨김 처리
+        e.Cancel = true;
+        ShowInTaskbar = false;
+        Hide();
+        _ = _attendanceService.RefreshStatusAsync();
     }
 
     private void OnBackClick(object sender, RoutedEventArgs e)
@@ -59,7 +122,7 @@ public partial class AttendanceWebWindow : Window
         }
         else
         {
-            await _attendanceService.ProbeDomAndApiStatusAsync(PortalWebView.CoreWebView2, fromPortalWindow: true);
+            await _attendanceService.ProbeDomAndApiStatusAsync(PortalWebView.CoreWebView2);
         }
     }
 
@@ -72,10 +135,9 @@ public partial class AttendanceWebWindow : Window
     {
         if (PortalWebView.CoreWebView2 != null)
         {
-            await _attendanceService.DismissBlockingPopupsAndSurveysAsync(PortalWebView.CoreWebView2);
-            await _attendanceService.ProbeDomAndApiStatusAsync(PortalWebView.CoreWebView2, fromPortalWindow: true);
+            await _attendanceService.ProbeDomAndApiStatusAsync(PortalWebView.CoreWebView2);
         }
-        await _attendanceService.RefreshStatusAsync();
-        Close();
+        ShowInTaskbar = false;
+        Hide();
     }
 }

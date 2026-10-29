@@ -56,6 +56,7 @@ public partial class MainWindow : Window
         Loaded += OnMainWindowLoaded;
         Closed += (_, _) =>
         {
+            _portalWindow?.ShutdownClose();
             _trayService.Dispose();
             _snapService.Dispose();
             _settingsService.Dispose();
@@ -105,9 +106,11 @@ public partial class MainWindow : Window
         _snapService.Initialize();
         _snapService.SnapToTaskbarDefault();
 
+        // MainWindow 밖의 별도 백그라운드 창에서 WebView2를 초기화 (Airspace 가림 문제 원천 방지)
         try
         {
-            await _attendanceService.InitializeHiddenWebViewAsync(HiddenWebView);
+            _portalWindow = new AttendanceWebWindow(_attendanceService);
+            await _portalWindow.InitializeInBackgroundAsync();
             _pollTimer.Start();
         }
         catch (Exception ex)
@@ -121,7 +124,6 @@ public partial class MainWindow : Window
         var settings = _settingsService.Current;
         var snapshot = _attendanceService.CurrentSnapshot;
 
-        // 1. 항상 위(AlwaysOnTop), 작업표시줄 표시(ShowInTaskbar), 투명도(Opacity), 크기(Scale) 적용
         Topmost = settings.AlwaysOnTop;
         ShowInTaskbar = settings.ShowInTaskbar;
         CapsuleBorder.Opacity = settings.WidgetOpacity;
@@ -130,7 +132,6 @@ public partial class MainWindow : Window
         CapsuleScaleTransform.ScaleX = settings.WidgetScale;
         CapsuleScaleTransform.ScaleY = settings.WidgetScale;
 
-        // 2. 윈도우 테마(System / Dark / Light) 적용
         bool isLightTheme = _settingsService.IsEffectiveLightTheme();
         if (isLightTheme)
         {
@@ -161,7 +162,6 @@ public partial class MainWindow : Window
                 (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#CBD5E1"));
         }
 
-        // 3. 사용자 지정 출근(근무중) / 퇴근 색상 파싱 및 적용
         System.Windows.Media.Color workingColor = AppSettingsService.ParseColorOrDefault(settings.WorkingColorHex, "#10B981");
         System.Windows.Media.Color offWorkColor = AppSettingsService.ParseColorOrDefault(settings.OffWorkColorHex, "#EF4444");
 
@@ -177,7 +177,6 @@ public partial class MainWindow : Window
         CapsuleGlow.Color = activeStatusColor;
         CapsuleBorder.BorderBrush = new SolidColorBrush(activeBorderColor);
 
-        // 4. 텍스트 및 액션 버튼 상태 적용
         StatusTitleText.Text = isWorking ? "근무중" : "퇴근";
         StatusTitleText.Foreground = activeBrush;
         SubStatusText.Text = snapshot.SubText;
@@ -210,7 +209,6 @@ public partial class MainWindow : Window
             ThumbClockActionBtn.Description = "지금 출근 처리하기";
         }
 
-        // 5. 작업표시줄 및 트레이 아이콘 동적 업데이트
         ImageSource dynamicIcon = _trayService.UpdateTrayAndWindowIcon(
             snapshot,
             settings,
@@ -557,19 +555,8 @@ public partial class MainWindow : Window
 
     private void OpenPortalWindow()
     {
-        if (_portalWindow != null && _portalWindow.IsLoaded)
-        {
-            _portalWindow.Activate();
-            return;
-        }
-
-        _portalWindow = new AttendanceWebWindow(_attendanceService);
-        _portalWindow.Closed += async (_, _) =>
-        {
-            _portalWindow = null;
-            await _attendanceService.RefreshStatusAsync();
-        };
-        _portalWindow.Show();
+        _portalWindow ??= new AttendanceWebWindow(_attendanceService);
+        _portalWindow.ShowInteractive();
     }
 
     private async void OnRefreshClick(object sender, RoutedEventArgs e)

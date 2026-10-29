@@ -28,13 +28,13 @@ public sealed class DaouAttendanceService
     public const string BaseDomain = "alinestudio.daouoffice.com";
 
     private CoreWebView2Environment? _env;
-    private WebView2? _hiddenWebView;
+    private WebView2? _webView;
     private bool _isInitialized;
 
     public AttendanceSnapshot CurrentSnapshot { get; private set; } = new(
         WorkStatusKind.OffWork,
         "퇴근 (연동 대기)",
-        "클릭하여 그룹웨어 연결",
+        "그룹웨어 동기화 중...",
         null,
         null,
         null,
@@ -61,30 +61,23 @@ public sealed class DaouAttendanceService
         return _env;
     }
 
-    public async Task InitializeHiddenWebViewAsync(WebView2 hiddenWebView)
+    public async Task InitializeWebViewAsync(WebView2 webView)
     {
         if (_isInitialized)
             return;
 
-        _hiddenWebView = hiddenWebView;
+        _webView = webView;
         var env = await GetOrCreateEnvironmentAsync();
-        await _hiddenWebView.EnsureCoreWebView2Async(env);
+        await _webView.EnsureCoreWebView2Async(env);
 
-        await AttachWebViewHooksAsync(_hiddenWebView.CoreWebView2, isHiddenInstance: true);
+        await AttachWebViewHooksAsync(_webView.CoreWebView2);
 
         _isInitialized = true;
-        _hiddenWebView.Source = new Uri(TargetAttendanceUrl);
+        _webView.Source = new Uri(TargetAttendanceUrl);
     }
 
-    /// <summary>
-    /// 숨겨진 WebView2 및 포털 창 WebView2 양쪽에 공통으로
-    /// 1) API 응답/DOM 변화 실시간 감지 훅
-    /// 2) 설문조사/팝업 차단 가드
-    /// 3) 네비게이션 완료 후 다단 프로브를 장착합니다.
-    /// </summary>
-    public async Task AttachWebViewHooksAsync(CoreWebView2 coreWebView, bool isHiddenInstance)
+    private async Task AttachWebViewHooksAsync(CoreWebView2 coreWebView)
     {
-        // 문서 생성 시점에 fetch/XHR 가로채기 및 DOM MutationObserver 등록
         await coreWebView.AddScriptToExecuteOnDocumentCreatedAsync(GetDocumentCreatedHookScript());
 
         coreWebView.WebMessageReceived += (_, e) =>
@@ -94,7 +87,7 @@ public sealed class DaouAttendanceService
                 string? json = e.TryGetWebMessageAsString();
                 if (!string.IsNullOrWhiteSpace(json))
                 {
-                    ProcessProbeJson(json, fromPortalWindow: !isHiddenInstance);
+                    ProcessProbeJson(json);
                 }
             }
             catch
@@ -133,20 +126,14 @@ public sealed class DaouAttendanceService
             string url = coreWebView.Source ?? string.Empty;
             if (IsLoginUrl(url))
             {
-                // 포털 창에서 이미 로그인된 상태가 아니라면 로그인 필요 표시
-                if (CurrentSnapshot.Status == WorkStatusKind.Unknown ||
-                    CurrentSnapshot.Status == WorkStatusKind.NeedsLogin ||
-                    !isHiddenInstance)
-                {
-                    UpdateSnapshot(new AttendanceSnapshot(
-                        WorkStatusKind.NeedsLogin,
-                        "퇴근 · 로그인 필요",
-                        "클릭하여 다우오피스 로그인",
-                        null,
-                        null,
-                        null,
-                        DateTime.Now));
-                }
+                UpdateSnapshot(new AttendanceSnapshot(
+                    WorkStatusKind.NeedsLogin,
+                    "퇴근 · 로그인 필요",
+                    "클릭하여 다우오피스 로그인",
+                    null,
+                    null,
+                    null,
+                    DateTime.Now));
                 return;
             }
 
@@ -156,24 +143,12 @@ public sealed class DaouAttendanceService
                 return;
             }
 
-            // 포털 창에서 로그인에 성공해 근태 페이지에 진입했다면,
-            // 백그라운드 HiddenWebView도 즉시 근태 페이지로 이동시켜 세션 동기화!
-            if (!isHiddenInstance && _hiddenWebView?.CoreWebView2 != null)
-            {
-                string hiddenUrl = _hiddenWebView.CoreWebView2.Source ?? string.Empty;
-                if (IsLoginUrl(hiddenUrl) || !hiddenUrl.Contains("/ehr/", StringComparison.OrdinalIgnoreCase))
-                {
-                    _hiddenWebView.CoreWebView2.Navigate(TargetAttendanceUrl);
-                }
-            }
-
-            // SPA 비동기 렌더링 대응: 0.6초, 1.8초, 3.5초 3단계 프로브 실행
-            int[] delays = [600, 1200, 1700];
+            // SPA 비동기 렌더링 대응: 0.5초, 1.5초, 3.0초 3단계 프로브 실행 (DOM 훼손 없이 읽기만 수행)
+            int[] delays = [500, 1000, 1500];
             foreach (int delay in delays)
             {
                 await Task.Delay(delay);
-                await DismissBlockingPopupsAndSurveysAsync(coreWebView);
-                await ProbeDomAndApiStatusAsync(coreWebView, fromPortalWindow: !isHiddenInstance);
+                await ProbeDomAndApiStatusAsync(coreWebView);
             }
         };
 
@@ -203,18 +178,13 @@ public sealed class DaouAttendanceService
                 }
 
                 await Task.Delay(350);
-                await ProbeDomAndApiStatusAsync(coreWebView, fromPortalWindow: !isHiddenInstance);
+                await ProbeDomAndApiStatusAsync(coreWebView);
             }
             catch
             {
                 // Ignore
             }
         };
-
-        if (isHiddenInstance)
-        {
-            coreWebView.ScriptDialogOpening += (_, args) => args.Accept();
-        }
     }
 
     public static bool IsBlockingSurveyOrPopupUrl(string url)
@@ -267,53 +237,47 @@ public sealed class DaouAttendanceService
 
     public async Task RefreshStatusAsync()
     {
-        if (_hiddenWebView?.CoreWebView2 == null)
+        if (_webView?.CoreWebView2 == null)
             return;
 
-        string currentUrl = _hiddenWebView.CoreWebView2.Source ?? string.Empty;
-
-        // 중요: HiddenWebView가 이전에 /login에 머물러 있더라도,
-        // 포털 창에서 로그인했을 수 있으므로 무조건 TargetAttendanceUrl로 재접속을 시도합니다!
+        string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
         if (IsLoginUrl(currentUrl) || !currentUrl.Contains("/ehr/", StringComparison.OrdinalIgnoreCase))
         {
-            _hiddenWebView.CoreWebView2.Navigate(TargetAttendanceUrl);
+            _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
             return;
         }
 
-        await DismissBlockingPopupsAndSurveysAsync(_hiddenWebView.CoreWebView2);
-        await ProbeDomAndApiStatusAsync(_hiddenWebView.CoreWebView2, fromPortalWindow: false);
+        await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
     }
 
     public async Task<(bool Success, string Message)> TriggerClockActionAsync(bool clockIn)
     {
-        if (_hiddenWebView?.CoreWebView2 == null)
+        if (_webView?.CoreWebView2 == null)
             return (false, "WebView2가 아직 초기화되지 않았습니다.");
 
-        string currentUrl = _hiddenWebView.CoreWebView2.Source ?? string.Empty;
+        string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
         if (IsLoginUrl(currentUrl) || !currentUrl.Contains("/ehr/", StringComparison.OrdinalIgnoreCase))
         {
-            _hiddenWebView.CoreWebView2.Navigate(TargetAttendanceUrl);
+            _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
             await Task.Delay(1800);
-            currentUrl = _hiddenWebView.CoreWebView2.Source ?? string.Empty;
+            currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
             if (IsLoginUrl(currentUrl))
                 return (false, "그룹웨어 로그인이 필요합니다. 로그인 창을 열어주세요.");
         }
-
-        await DismissBlockingPopupsAndSurveysAsync(_hiddenWebView.CoreWebView2);
 
         string script = clockIn ? GetClockInTriggerScript() : GetClockOutTriggerScript();
 
         try
         {
-            string rawResult = await _hiddenWebView.CoreWebView2.ExecuteScriptAsync(script);
+            string rawResult = await _webView.CoreWebView2.ExecuteScriptAsync(script);
             string result = JsonSerializer.Deserialize<string>(rawResult) ?? "UNKNOWN";
 
             if (result.StartsWith("OK:", StringComparison.Ordinal))
             {
                 await Task.Delay(600);
-                await _hiddenWebView.CoreWebView2.ExecuteScriptAsync(GetConfirmModalClickScript());
+                await _webView.CoreWebView2.ExecuteScriptAsync(GetConfirmModalClickScript());
                 await Task.Delay(1000);
-                await ProbeDomAndApiStatusAsync(_hiddenWebView.CoreWebView2, fromPortalWindow: false);
+                await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
 
                 return (true, clockIn ? "출근 처리가 요청되었습니다." : "퇴근 처리가 요청되었습니다.");
             }
@@ -353,7 +317,7 @@ public sealed class DaouAttendanceService
         }
     }
 
-    public async Task ProbeDomAndApiStatusAsync(CoreWebView2 webView, bool fromPortalWindow = false)
+    public async Task ProbeDomAndApiStatusAsync(CoreWebView2 webView)
     {
         try
         {
@@ -361,7 +325,7 @@ public sealed class DaouAttendanceService
             string? innerJson = JsonSerializer.Deserialize<string>(rawJson);
             if (!string.IsNullOrWhiteSpace(innerJson))
             {
-                ProcessProbeJson(innerJson, fromPortalWindow);
+                ProcessProbeJson(innerJson);
             }
         }
         catch
@@ -370,11 +334,10 @@ public sealed class DaouAttendanceService
         }
     }
 
-    private void ProcessProbeJson(string innerJson, bool fromPortalWindow)
+    private void ProcessProbeJson(string innerJson)
     {
         try
         {
-            // 디버그 확인용 최근 프로브 결과 기록
             try
             {
                 File.WriteAllText(LastProbeLogPath, innerJson);
@@ -390,17 +353,14 @@ public sealed class DaouAttendanceService
             bool isLogin = root.TryGetProperty("isLoginPage", out var loginProp) && loginProp.GetBoolean();
             if (isLogin)
             {
-                if (fromPortalWindow || CurrentSnapshot.Status == WorkStatusKind.Unknown)
-                {
-                    UpdateSnapshot(new AttendanceSnapshot(
-                        WorkStatusKind.NeedsLogin,
-                        "퇴근 · 로그인 필요",
-                        "클릭하여 다우오피스 로그인",
-                        null,
-                        null,
-                        null,
-                        DateTime.Now));
-                }
+                UpdateSnapshot(new AttendanceSnapshot(
+                    WorkStatusKind.NeedsLogin,
+                    "퇴근 · 로그인 필요",
+                    "클릭하여 다우오피스 로그인",
+                    null,
+                    null,
+                    null,
+                    DateTime.Now));
                 return;
             }
 
@@ -467,10 +427,6 @@ public sealed class DaouAttendanceService
                url.Contains("sso", StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>
-    /// 페이지 로드 시작 시 주입되어 fetch / XMLHttpRequest의 근태 API 응답을 캐시하고,
-    /// DOM 변경 시 자동으로 상태를 측정해 C# 호스트로 전송하는 스크립트입니다.
-    /// </summary>
     private static string GetDocumentCreatedHookScript() => """
         (() => {
             window.__workdotApiLogs = window.__workdotApiLogs || [];
@@ -489,7 +445,6 @@ public sealed class DaouAttendanceService
                 } catch {}
             };
 
-            // 1. fetch 가로채기
             const origFetch = window.fetch;
             if (origFetch) {
                 window.fetch = async function(...args) {
@@ -503,7 +458,6 @@ public sealed class DaouAttendanceService
                 };
             }
 
-            // 2. XMLHttpRequest 가로채기
             const origOpen = XMLHttpRequest.prototype.open;
             const origSend = XMLHttpRequest.prototype.send;
             XMLHttpRequest.prototype.open = function(method, url, ...rest) {
@@ -522,7 +476,6 @@ public sealed class DaouAttendanceService
                 return origSend.apply(this, args);
             };
 
-            // 3. DOM 변경 시 자동 프로브 스케줄러
             let probeTimer = null;
             window.__workdotScheduleProbe = (delayMs = 400) => {
                 if (probeTimer) clearTimeout(probeTimer);
@@ -548,11 +501,8 @@ public sealed class DaouAttendanceService
     private static string GetDismissPopupsScript() => """
         (() => {
             let count = 0;
-            const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-
             const closeBtnSelectors = [
                 '.go_popup .btn_layer_x',
-                '.go_popup a.btn_minor_s',
                 '.layer_normal .btn_layer_x',
                 '.layer_notice .btn_layer_x',
                 '[data-role="layerClose"]',
@@ -564,33 +514,10 @@ public sealed class DaouAttendanceService
                     try { el.click(); count++; } catch {}
                 });
             }
-
-            const popupContainers = document.querySelectorAll(
-                '.go_popup, .layer_normal, .layer_notice, .layer_survey, #popOverlay, .overlay, .dimmed, [id*="popup"], [class*="popup_layer"]'
-            );
-            popupContainers.forEach(popup => {
-                const txt = clean(popup.innerText);
-                if (!txt.includes('출근') && !txt.includes('퇴근')) {
-                    popup.remove();
-                    count++;
-                }
-            });
-
-            if (document.body) {
-                document.body.style.overflow = 'auto';
-                document.body.classList.remove('modal-open', 'scroll_lock');
-            }
             return count;
         })();
         """;
 
-    /// <summary>
-    /// 다우오피스 내 근태 현황 페이지에서
-    /// 1) 가로챈 REST API 응답(__workdotApiLogs)
-    /// 2) 좌측/상단 오늘의 출퇴근 위젯 (출근시간 / 퇴근시간 라벨-값 쌍 및 버튼 상태)
-    /// 3) 일별 테이블의 오늘(today) 행
-    /// 을 종합 분석하여 정확한 근무 상태를 반환합니다.
-    /// </summary>
     private static string GetAttendanceProbeScript() => """
         (() => {
             const runProbe = () => {
@@ -605,11 +532,27 @@ public sealed class DaouAttendanceService
                 const timeOnlyRe = /\b([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?\b/;
                 const unsetRe = /(미등록|미체크|퇴근전|출근전|--:--|^-$|^-\s*:\s*-)/;
 
-                // 모든 document 수집 (메인 + 동일 출처 iframe)
                 const docs = [document];
                 document.querySelectorAll('iframe').forEach(ifr => {
                     try { if (ifr.contentDocument) docs.push(ifr.contentDocument); } catch {}
                 });
+
+                // 현재 실시간 시계(live clock) 텍스트 감지하여 출근시간 오인 방지
+                const liveClockTimes = new Set();
+                const now = new Date();
+                const pad2 = (n) => String(n).padStart(2, '0');
+                for (let diff = -2; diff <= 2; diff++) {
+                    const d = new Date(now.getTime() + diff * 1000);
+                    liveClockTimes.add(`${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`);
+                }
+                for (const doc of docs) {
+                    doc.querySelectorAll('#timelineClock, .time_info, .clock, #clock, .now_time, .real_time').forEach(el => {
+                        const m = clean(el.innerText).match(timeOnlyRe);
+                        if (m) liveClockTimes.add(m[0]);
+                    });
+                }
+
+                const isLiveClockValue = (t) => t && liveClockTimes.has(t);
 
                 let clockIn = null;
                 let clockOut = null;
@@ -618,17 +561,16 @@ public sealed class DaouAttendanceService
                 let badgeText = null;
                 let apiStatus = null;
 
-                // -----------------------------------------------------------------
-                // 전략 1: 가로챈 다우오피스 API JSON(__workdotApiLogs)에서 오늘 데이터 추출
-                // -----------------------------------------------------------------
-                const now = new Date();
                 const yyyy = now.getFullYear();
-                const mm = String(now.getMonth() + 1).padStart(2, '0');
-                const dd = String(now.getDate()).padStart(2, '0');
+                const mm = pad2(now.getMonth() + 1);
+                const dd = pad2(now.getDate());
                 const todayIso = `${yyyy}-${mm}-${dd}`;
                 const todayDot = `${yyyy}.${mm}.${dd}`;
                 const todayCompact = `${yyyy}${mm}${dd}`;
 
+                // -----------------------------------------------------------------
+                // 전략 1: 가로챈 다우오피스 API JSON(__workdotApiLogs)에서 오늘 데이터 추출
+                // -----------------------------------------------------------------
                 if (Array.isArray(window.__workdotApiLogs)) {
                     for (let i = window.__workdotApiLogs.length - 1; i >= 0; i--) {
                         const entry = window.__workdotApiLogs[i];
@@ -641,13 +583,12 @@ public sealed class DaouAttendanceService
                                 return;
                             }
 
-                            // 날짜 필드가 있는 객체면 오늘 날짜인지 확인
                             const dVal = obj.date || obj.logDate || obj.workDate || obj.baseDate || obj.targetDate || obj.attndDate || obj.solarDate;
                             if (typeof dVal === 'string') {
                                 const dClean = dVal.slice(0, 10);
                                 if (/^\d{4}[-.]?\d{2}[-.]?\d{2}/.test(dClean) &&
                                     !dClean.includes(todayIso) && !dClean.includes(todayDot) && !dClean.includes(todayCompact)) {
-                                    return; // 과거/미래 날짜 레코드는 스킵!
+                                    return;
                                 }
                             }
 
@@ -656,11 +597,13 @@ public sealed class DaouAttendanceService
                             const stRaw = obj.workStatus ?? obj.timelineStatus ?? obj.attndStatus ?? obj.workingStatus ?? obj.statusName ?? obj.stateName;
 
                             if (typeof inRaw === 'string' && timeOnlyRe.test(inRaw) && !clockIn) {
-                                clockIn = inRaw.match(timeOnlyRe)[0];
+                                const m = inRaw.match(timeOnlyRe)[0];
+                                if (!isLiveClockValue(m)) clockIn = m;
                             }
                             if (typeof outRaw === 'string') {
                                 if (timeOnlyRe.test(outRaw) && !outRaw.startsWith('00:00') && !clockOut) {
-                                    clockOut = outRaw.match(timeOnlyRe)[0];
+                                    const m = outRaw.match(timeOnlyRe)[0];
+                                    if (!isLiveClockValue(m)) clockOut = m;
                                 } else if (!outRaw || unsetRe.test(outRaw)) {
                                     clockOutExplicitlyUnset = true;
                                 }
@@ -681,12 +624,11 @@ public sealed class DaouAttendanceService
                 }
 
                 // -----------------------------------------------------------------
-                // 전략 2: DOM 탐색 (과거 날짜 테이블 행을 제외하고 오늘의 근태 영역만 탐색!)
+                // 전략 2: DOM 탐색 (과거 날짜 테이블 행 및 실시간 시계 제외)
                 // -----------------------------------------------------------------
                 const isInsidePastTableRow = (el) => {
                     const tr = el.closest('tr, .tb_row, .timeline_row, [class*="row"]');
                     if (!tr) return false;
-                    // 만약 tr이 달력/일별 목록 테이블 내부라면 today 표시가 있는지 확인
                     const trText = clean(tr.innerText);
                     const hasDatePrefix = /\b\d{2}\s*\([월화수목금토일]\)|\b\d{4}[-.]\d{2}[-.]\d{2}\b/.test(trText);
                     if (!hasDatePrefix) return false;
@@ -704,14 +646,12 @@ public sealed class DaouAttendanceService
                 };
 
                 for (const doc of docs) {
-                    // 2-A. 명시적 ID / Class 셀렉터
                     const inSelectors = ['#workInTime', '#clockInTime', '.work_in_time', '.clock_in_time', '[data-role="clockInTime"]', '[data-id="clockInTime"]'];
                     for (const sel of inSelectors) {
                         const el = doc.querySelector(sel);
                         if (el) {
-                            const t = clean(el.innerText);
-                            const m = t.match(timeOnlyRe);
-                            if (m && !clockIn) clockIn = m[0];
+                            const m = clean(el.innerText).match(timeOnlyRe);
+                            if (m && !isLiveClockValue(m[0]) && !clockIn) clockIn = m[0];
                         }
                     }
 
@@ -721,68 +661,61 @@ public sealed class DaouAttendanceService
                         if (el) {
                             const t = clean(el.innerText);
                             const m = t.match(timeOnlyRe);
-                            if (m && !clockOut) clockOut = m[0];
+                            if (m && !isLiveClockValue(m[0]) && !clockOut) clockOut = m[0];
                             else if (unsetRe.test(t)) clockOutExplicitlyUnset = true;
                         }
                     }
 
-                    // 2-B. 라벨('출근시간'/'출근', '퇴근시간'/'퇴근')과 인접 형제(nextElementSibling) 또는 부모 쌍 탐색
-                    const allNodes = Array.from(doc.querySelectorAll('dt, th, span, div, p, strong, label, a, button, li'));
+                    // 라벨('출근시간'/'출근시각'/'출근', '퇴근시간'/'퇴근시각'/'퇴근')과 인접 형제 탐색
+                    const allNodes = Array.from(doc.querySelectorAll('dt, th, span, div, p, strong, label, li'));
                     for (const el of allNodes) {
                         if (isInsidePastTableRow(el)) continue;
 
                         const ownText = clean(el.innerText);
-                        if (!ownText || ownText.length > 45) continue;
+                        if (!ownText || ownText.length > 40) continue;
 
-                        // (1) 출근 라벨 매칭
-                        if (/^(출근시간|출근시각|출근|업무시작|출근하기)$/.test(ownText)) {
+                        // (1) 출근 시간 라벨 매칭 (버튼 '출근하기'는 제외!)
+                        if (/^(출근시간|출근시각|출근|업무시작)$/.test(ownText)) {
                             const sib = el.nextElementSibling;
                             if (sib) {
                                 const sibText = clean(sib.innerText);
                                 const m = sibText.match(timeOnlyRe);
-                                if (m && !clockIn) clockIn = m[0];
-                            } else if (el.parentElement) {
-                                const pText = clean(el.parentElement.innerText);
-                                if (pText.length < 60) {
-                                    const m = pText.match(timeOnlyRe);
-                                    if (m && !clockIn) clockIn = m[0];
-                                }
+                                if (m && !isLiveClockValue(m[0]) && !clockIn) clockIn = m[0];
                             }
-                        } else if (!clockIn && /(출근시간|출근시각|출근|업무시작)\s*[:：]?\s*([01]\d|2[0-3]):[0-5]\d/.test(ownText)) {
-                            const m = ownText.match(timeOnlyRe);
-                            if (m) clockIn = m[0];
+                        } else if (!clockIn) {
+                            const afterInMatch = ownText.match(/(?:출근시간|출근시각|출근|업무시작)\s*[:：]?\s*([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?/);
+                            if (afterInMatch) {
+                                const m = afterInMatch[0].match(timeOnlyRe);
+                                if (m && !isLiveClockValue(m[0])) clockIn = m[0];
+                            }
                         }
 
-                        // (2) 퇴근 라벨 매칭
-                        if (/^(퇴근시간|퇴근시각|퇴근|업무종료|퇴근하기)$/.test(ownText)) {
+                        // (2) 퇴근 시간 라벨 매칭
+                        if (/^(퇴근시간|퇴근시각|퇴근|업무종료)$/.test(ownText)) {
                             const sib = el.nextElementSibling;
                             if (sib) {
                                 const sibText = clean(sib.innerText);
                                 const m = sibText.match(timeOnlyRe);
-                                if (m && !clockOut) clockOut = m[0];
+                                if (m && !isLiveClockValue(m[0]) && !clockOut) clockOut = m[0];
                                 else if (unsetRe.test(sibText)) clockOutExplicitlyUnset = true;
-                            } else if (el.parentElement) {
-                                const pText = clean(el.parentElement.innerText);
-                                if (pText.length < 60) {
-                                    const afterLabel = pText.replace(/^(퇴근시간|퇴근시각|퇴근|업무종료|퇴근하기)/, '');
-                                    const m = afterLabel.match(timeOnlyRe);
-                                    if (m && !clockOut) clockOut = m[0];
-                                    else if (unsetRe.test(afterLabel)) clockOutExplicitlyUnset = true;
-                                }
                             }
-                        } else if (!clockOut && /(퇴근시간|퇴근시각|퇴근|업무종료)\s*[:：]?\s*([01]\d|2[0-3]):[0-5]\d/.test(ownText)) {
-                            const m = ownText.match(timeOnlyRe);
-                            if (m) clockOut = m[0];
-                        } else if (/(퇴근시간|퇴근시각|퇴근)\s*[:：]?\s*(미등록|--|-)/.test(ownText)) {
-                            clockOutExplicitlyUnset = true;
+                        } else if (!clockOut) {
+                            const afterOutMatch = ownText.match(/(?:퇴근시간|퇴근시각|퇴근|업무종료)\s*[:：]?\s*([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?/);
+                            if (afterOutMatch) {
+                                const m = afterOutMatch[0].match(timeOnlyRe);
+                                if (m && !isLiveClockValue(m[0])) clockOut = m[0];
+                            } else if (/(?:퇴근시간|퇴근시각|퇴근)\s*[:：]?\s*(미등록|--|-)/.test(ownText)) {
+                                clockOutExplicitlyUnset = true;
+                            }
                         }
                     }
 
-                    // 2-C. 오늘(today) 테이블 행에서 출근/퇴근 시간 보조 추출
+                    // 오늘(today) 테이블 행에서 출근/퇴근 시간 보조 추출
                     const todayRows = Array.from(doc.querySelectorAll('tr.today, .today_row, .tb_attend .today'));
                     for (const row of todayRows) {
                         const rowToCheck = row.closest('tr') || row;
-                        const times = (clean(rowToCheck.innerText).match(/\b([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?\b/g)) || [];
+                        const times = (clean(rowToCheck.innerText).match(/\b([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?\b/g) || [])
+                            .filter(t => !isLiveClockValue(t));
                         if (times.length === 1 && !clockIn) {
                             clockIn = times[0];
                             clockOutExplicitlyUnset = true;
@@ -792,27 +725,30 @@ public sealed class DaouAttendanceService
                         }
                     }
 
-                    // 2-D. 상태 배지 / 드롭다운 탐색 ("근무중", "업무중", "업무종료", "출근전" 등)
+                    // 화면에 실제로 보이는(offsetParent !== null) 상태 배지만 탐색 (드롭다운 옵션 메뉴 내부 li/option 제외!)
                     const statusEls = Array.from(doc.querySelectorAll(
-                        'select option:checked, .state, .status, .badge, .chip, .label, .txt_state, .btn_state, [class*="status"], [class*="state"]'
+                        'select option:checked, .state, .status, .badge, .chip, .txt_state, .btn_state'
                     ));
                     for (const el of statusEls) {
+                        if (el.tagName !== 'OPTION' && el.offsetParent === null) continue;
+                        if (el.closest('ul, .layer_transition, .dropdown, [style*="display: none"], [style*="display:none"]')) continue;
                         if (isInsidePastTableRow(el)) continue;
+
                         const t = clean(el.innerText);
-                        if (!t || t.length > 15) continue;
+                        if (!t || t.length > 12) continue;
 
                         if (['근무중', '근무 중', '업무중', '업무 중', '정상근무', '연장근무', '외근', '출장'].includes(t)) {
                             badgeText = t;
                             break;
                         }
-                        if (['퇴근', '업무종료', '업무 종료', '출근전', '출근 전', '미출근', '근무종료'].includes(t)) {
+                        if (['퇴근', '업무종료', '업무 종료', '출근전', '출근 전', '미출근'].includes(t)) {
                             badgeText = t;
                         }
                     }
                 }
 
                 // -----------------------------------------------------------------
-                // 3. 버튼 활성/비활성 상태 확인
+                // 3. 출근하기 / 퇴근하기 버튼 활성·비활성 상태 확인 (가장 확실한 지표)
                 // -----------------------------------------------------------------
                 let clockInBtnFound = false;
                 let clockInBtnDisabled = false;
@@ -837,13 +773,13 @@ public sealed class DaouAttendanceService
                             clockInBtnFound = true;
                             if (isDisabled) clockInBtnDisabled = true;
                             const m = t.match(timeOnlyRe);
-                            if (m && !clockIn) clockIn = m[0];
+                            if (m && !isLiveClockValue(m[0]) && !clockIn) clockIn = m[0];
                         }
                         if (id === 'workout' || id === 'clockout' || t.startsWith('퇴근하기') || t === '퇴근') {
                             clockOutBtnFound = true;
                             if (isDisabled) clockOutBtnDisabled = true;
                             const m = t.match(timeOnlyRe);
-                            if (m && !clockOut) clockOut = m[0];
+                            if (m && !isLiveClockValue(m[0]) && !clockOut) clockOut = m[0];
                         }
                     }
                 }
@@ -856,34 +792,40 @@ public sealed class DaouAttendanceService
                 const hasValidClockOut = Boolean(clockOut && !clockOut.startsWith('00:00'));
 
                 // -----------------------------------------------------------------
-                // 4. 최종 근무중(WORKING) / 퇴근(OFF_WORK) / 로딩중(LOADING) 판정
+                // 4. 최종 근무중(WORKING) / 퇴근(OFF_WORK) 판정 (우선순위 정밀화)
                 // -----------------------------------------------------------------
                 let state = 'UNKNOWN';
 
-                const combinedStatus = ((apiStatus || '') + ' ' + (badgeText || '')).toUpperCase();
-
-                if (combinedStatus.includes('WORKING') || combinedStatus.includes('WORK_IN') || combinedStatus.includes('ON_WORK') ||
-                    combinedStatus.includes('근무중') || combinedStatus.includes('근무 중') ||
-                    combinedStatus.includes('업무중') || combinedStatus.includes('업무 중')) {
+                // 1순위: 출근하기 버튼은 비활성화(출근 완료)되어 있고 퇴근하기 버튼은 활성화(퇴근 전)되어 있으며 퇴근 시각이 없는 경우 -> 100% 근무중!
+                if (clockInBtnFound && clockInBtnDisabled && clockOutBtnFound && !clockOutBtnDisabled && !hasValidClockOut) {
                     state = 'WORKING';
-                } else if (combinedStatus.includes('WORK_OUT') || combinedStatus.includes('OFF_WORK') ||
-                           combinedStatus.includes('업무종료') || combinedStatus.includes('업무 종료') ||
-                           combinedStatus.includes('근무종료') || combinedStatus.includes('출근전') || combinedStatus.includes('출근 전')) {
-                    state = 'OFF_WORK';
-                } else if (hasValidClockIn && !hasValidClockOut) {
-                    state = 'WORKING';
-                } else if (hasValidClockIn && hasValidClockOut) {
-                    state = 'OFF_WORK';
-                } else if (clockInBtnFound && clockInBtnDisabled && clockOutBtnFound && !clockOutBtnDisabled) {
-                    state = 'WORKING';
-                } else if (clockInBtnFound || clockOutBtnFound || badgeText) {
-                    state = 'OFF_WORK';
-                } else {
-                    // 아직 SPA DOM이 렌더링되기 전이면 LOADING 반환하여 잘못된 상태 덮어쓰기 방지
-                    state = 'LOADING';
                 }
-
-                const sidebarSample = clean((document.querySelector('.go_side, aside, .ehr_stat, .attend_contents, main, #content') || document.body)?.innerText || '').slice(0, 600);
+                // 2순위: 출근 시각이 찍혀 있고 퇴근 시각이 아직 없는 경우 -> 근무중!
+                else if (hasValidClockIn && !hasValidClockOut) {
+                    state = 'WORKING';
+                }
+                // 3순위: 퇴근 시각이 찍혀 있거나, 출근/퇴근 버튼이 둘 다 비활성화된 경우 -> 퇴근!
+                else if (hasValidClockOut || (clockInBtnFound && clockInBtnDisabled && clockOutBtnFound && clockOutBtnDisabled)) {
+                    state = 'OFF_WORK';
+                }
+                // 4순위: 출근하기 버튼이 활성화되어 있는 경우 (아직 출근 전) -> 퇴근(미출근)!
+                else if (clockInBtnFound && !clockInBtnDisabled) {
+                    state = 'OFF_WORK';
+                }
+                // 5순위: API 상태값 또는 화면 배지 텍스트
+                else {
+                    const combinedStatus = ((apiStatus || '') + ' ' + (badgeText || '')).toUpperCase();
+                    if (combinedStatus.includes('WORKING') || combinedStatus.includes('WORK_IN') || combinedStatus.includes('ON_WORK') ||
+                        combinedStatus.includes('근무중') || combinedStatus.includes('근무 중') ||
+                        combinedStatus.includes('업무중') || combinedStatus.includes('업무 중')) {
+                        state = 'WORKING';
+                    } else if (combinedStatus.includes('WORK_OUT') || combinedStatus.includes('OFF_WORK') ||
+                               combinedStatus.includes('업무종료') || combinedStatus.includes('출근전')) {
+                        state = 'OFF_WORK';
+                    } else {
+                        state = 'LOADING';
+                    }
+                }
 
                 return JSON.stringify({
                     isLoginPage: false,
@@ -898,8 +840,7 @@ public sealed class DaouAttendanceService
                     clockInBtnFound,
                     clockInBtnDisabled,
                     clockOutBtnFound,
-                    clockOutBtnDisabled,
-                    sidebarSample
+                    clockOutBtnDisabled
                 });
             };
 
@@ -955,7 +896,7 @@ public sealed class DaouAttendanceService
             for (const btn of modalBtns) {
                 const t = clean(btn.innerText);
                 if (t === '확인' || t === '예' || t === '출근' || t === '퇴근') {
-                    btn.click();
+                    el.click();
                     return 'CONFIRMED';
                 }
             }
