@@ -9,12 +9,14 @@ namespace WorkDot;
 public partial class SettingsWindow : Window
 {
     private readonly AppSettingsService _settingsService;
-    private bool _isLoadingUi;
+    private bool _isLoadingUi = true;
 
     public SettingsWindow(AppSettingsService settingsService)
     {
-        InitializeComponent();
         _settingsService = settingsService;
+        _isLoadingUi = true;
+
+        InitializeComponent();
 
         string version = AppSettingsService.AppVersion;
         VersionBadgeText.Text = version;
@@ -64,7 +66,7 @@ public partial class SettingsWindow : Window
 
     private void OnThemeRadioChanged(object sender, RoutedEventArgs e)
     {
-        if (_isLoadingUi)
+        if (_isLoadingUi || _settingsService == null)
             return;
 
         WidgetThemeMode mode = WidgetThemeMode.System;
@@ -94,7 +96,7 @@ public partial class SettingsWindow : Window
 
     private void OnWorkingHexChanged(object sender, TextChangedEventArgs e)
     {
-        if (_isLoadingUi)
+        if (_isLoadingUi || _settingsService == null || WorkingHexBox == null || WorkingColorPreview == null)
             return;
 
         string text = WorkingHexBox.Text.Trim();
@@ -108,7 +110,7 @@ public partial class SettingsWindow : Window
 
     private void OnOffWorkHexChanged(object sender, TextChangedEventArgs e)
     {
-        if (_isLoadingUi)
+        if (_isLoadingUi || _settingsService == null || OffWorkHexBox == null || OffWorkColorPreview == null)
             return;
 
         string text = OffWorkHexBox.Text.Trim();
@@ -122,7 +124,7 @@ public partial class SettingsWindow : Window
 
     private void OnOpacitySliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (_isLoadingUi || OpacityValueText == null)
+        if (_isLoadingUi || _settingsService == null || OpacityValueText == null)
             return;
 
         double val = Math.Round(e.NewValue, 2);
@@ -132,7 +134,7 @@ public partial class SettingsWindow : Window
 
     private void OnScaleSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (_isLoadingUi || ScaleValueText == null)
+        if (_isLoadingUi || _settingsService == null || ScaleValueText == null)
             return;
 
         double val = Math.Round(e.NewValue, 2);
@@ -151,7 +153,7 @@ public partial class SettingsWindow : Window
 
     private void OnBehaviorCheckChanged(object sender, RoutedEventArgs e)
     {
-        if (_isLoadingUi)
+        if (_isLoadingUi || _settingsService == null)
             return;
 
         bool topMost = AlwaysOnTopCheck.IsChecked == true;

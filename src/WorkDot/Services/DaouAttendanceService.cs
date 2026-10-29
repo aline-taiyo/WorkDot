@@ -1,4 +1,6 @@
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
@@ -22,14 +24,29 @@ public sealed record AttendanceSnapshot(
     string? WorkedDurationText,
     DateTime UpdatedAt);
 
+internal sealed record SavedCookieItem(
+    string Name,
+    string Value,
+    string Domain,
+    string Path,
+    bool IsHttpOnly,
+    bool IsSecure,
+    CoreWebView2CookieSameSiteKind SameSite);
+
+internal sealed record SavedCredentials(
+    string Username,
+    string Password);
+
 public sealed class DaouAttendanceService
 {
     public const string TargetAttendanceUrl = "https://alinestudio.daouoffice.com/ehr/app/attend/my-attendance-status";
+    public const string BaseUrl = "https://alinestudio.daouoffice.com";
     public const string BaseDomain = "alinestudio.daouoffice.com";
 
     private CoreWebView2Environment? _env;
     private WebView2? _webView;
     private bool _isInitialized;
+    private DateTime _lastAutoLoginAttempt = DateTime.MinValue;
 
     public AttendanceSnapshot CurrentSnapshot { get; private set; } = new(
         WorkStatusKind.OffWork,
@@ -51,6 +68,12 @@ public sealed class DaouAttendanceService
     public string LastProbeLogPath =>
         Path.Combine(AppDataFolder, "last-probe.json");
 
+    private string SavedCookiesFilePath =>
+        Path.Combine(AppDataFolder, "session-cookies.dat");
+
+    private string SavedCredentialsFilePath =>
+        Path.Combine(AppDataFolder, "auth-credentials.dat");
+
     public async Task<CoreWebView2Environment> GetOrCreateEnvironmentAsync()
     {
         if (_env != null)
@@ -70,6 +93,10 @@ public sealed class DaouAttendanceService
         var env = await GetOrCreateEnvironmentAsync();
         await _webView.EnsureCoreWebView2Async(env);
 
+        // 1. 앱 시작 시 저장된 다우오피스 세션 쿠키(GOSSOcookie 등)를 먼저 복원하여 재로그인 방지
+        await RestoreSessionCookiesAsync(_webView.CoreWebView2);
+
+        // 2. 실시간 API/DOM 훅 및 자동 로그인 캡처 장착
         await AttachWebViewHooksAsync(_webView.CoreWebView2);
 
         _isInitialized = true;
@@ -87,7 +114,7 @@ public sealed class DaouAttendanceService
                 string? json = e.TryGetWebMessageAsString();
                 if (!string.IsNullOrWhiteSpace(json))
                 {
-                    ProcessProbeJson(json);
+                    ProcessWebMessageJson(json);
                 }
             }
             catch
@@ -111,7 +138,6 @@ public sealed class DaouAttendanceService
             }
         };
 
-        // 다우오피스 로고/리소스가 작업 폴더에 자동 다운로드되는 현상 차단
         coreWebView.DownloadStarting += (_, e) =>
         {
             e.Cancel = true;
@@ -132,16 +158,24 @@ public sealed class DaouAttendanceService
             string url = coreWebView.Source ?? string.Empty;
             if (IsLoginUrl(url))
             {
-                UpdateSnapshot(new AttendanceSnapshot(
-                    WorkStatusKind.NeedsLogin,
-                    "퇴근 · 로그인 필요",
-                    "클릭하여 다우오피스 로그인",
-                    null,
-                    null,
-                    null,
-                    DateTime.Now));
+                // 저장된 자격증명이 있으면 백그라운드 자동 로그인 시도
+                bool autoLoggedIn = await TryAutoLoginIfPossibleAsync(coreWebView);
+                if (!autoLoggedIn)
+                {
+                    UpdateSnapshot(new AttendanceSnapshot(
+                        WorkStatusKind.NeedsLogin,
+                        "퇴근 · 로그인 필요",
+                        "클릭하여 다우오피스 로그인 (1회 로그인 시 자동 유지)",
+                        null,
+                        null,
+                        null,
+                        DateTime.Now));
+                }
                 return;
             }
+
+            // 로그인 성공 상태이므로 세션 쿠키(GOSSOcookie 등)를 영구 쿠키로 승격 및 백업 저장!
+            await PersistSessionCookiesAsync(coreWebView);
 
             if (IsRedirectedAwayFromAttendanceAfterLogin(url))
             {
@@ -149,7 +183,6 @@ public sealed class DaouAttendanceService
                 return;
             }
 
-            // SPA 비동기 렌더링 대응: 0.5초, 1.5초, 3.0초 3단계 프로브 실행 (DOM 훼손 없이 읽기만 수행)
             int[] delays = [500, 1000, 1500];
             foreach (int delay in delays)
             {
@@ -175,7 +208,7 @@ public sealed class DaouAttendanceService
                     UpdateSnapshot(new AttendanceSnapshot(
                         WorkStatusKind.NeedsLogin,
                         "퇴근 · 로그인 필요",
-                        "세션 만료됨 · 다시 로그인 필요",
+                        "세션 만료됨 · 재로그인 중",
                         null,
                         null,
                         null,
@@ -191,6 +224,223 @@ public sealed class DaouAttendanceService
                 // Ignore
             }
         };
+    }
+
+    /// <summary>
+    /// 다우오피스 세션 쿠키(GOSSOcookie 등)가 앱 종료 시 삭제되지 않도록
+    /// 만료일을 30일 뒤로 연장하고 DPAPI 암호화 파일로 백업합니다.
+    /// </summary>
+    public async Task PersistSessionCookiesAsync(CoreWebView2 coreWebView)
+    {
+        try
+        {
+            var cookies = await coreWebView.CookieManager.GetCookiesAsync(BaseUrl);
+            if (cookies == null || cookies.Count == 0)
+                return;
+
+            var savedList = new List<SavedCookieItem>();
+            DateTime expiresAt = DateTime.UtcNow.AddDays(30);
+
+            foreach (var c in cookies)
+            {
+                if (string.IsNullOrWhiteSpace(c.Name) || string.IsNullOrWhiteSpace(c.Value))
+                    continue;
+
+                savedList.Add(new SavedCookieItem(
+                    c.Name,
+                    c.Value,
+                    c.Domain,
+                    c.Path,
+                    c.IsHttpOnly,
+                    c.IsSecure,
+                    c.SameSite));
+
+                // 세션 전용 쿠키(앱 종료 시 증발하는 쿠키)를 30일 영구 쿠키로 승격
+                if (c.IsSession)
+                {
+                    var persistentCookie = coreWebView.CookieManager.CreateCookie(c.Name, c.Value, c.Domain, c.Path);
+                    persistentCookie.IsHttpOnly = c.IsHttpOnly;
+                    persistentCookie.IsSecure = c.IsSecure;
+                    persistentCookie.SameSite = c.SameSite;
+                    persistentCookie.Expires = expiresAt;
+                    coreWebView.CookieManager.AddOrUpdateCookie(persistentCookie);
+                }
+            }
+
+            if (savedList.Count > 0)
+            {
+                string json = JsonSerializer.Serialize(savedList);
+                byte[] encrypted = ProtectedData.Protect(
+                    Encoding.UTF8.GetBytes(json),
+                    null,
+                    DataProtectionScope.CurrentUser);
+                Directory.CreateDirectory(AppDataFolder);
+                await File.WriteAllBytesAsync(SavedCookiesFilePath, encrypted);
+            }
+        }
+        catch
+        {
+            // Ignore cookie persistence errors
+        }
+    }
+
+    private async Task RestoreSessionCookiesAsync(CoreWebView2 coreWebView)
+    {
+        try
+        {
+            if (!File.Exists(SavedCookiesFilePath))
+                return;
+
+            byte[] encrypted = await File.ReadAllBytesAsync(SavedCookiesFilePath);
+            byte[] decrypted = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
+            string json = Encoding.UTF8.GetString(decrypted);
+
+            var savedList = JsonSerializer.Deserialize<List<SavedCookieItem>>(json);
+            if (savedList == null || savedList.Count == 0)
+                return;
+
+            DateTime expiresAt = DateTime.UtcNow.AddDays(30);
+            foreach (var item in savedList)
+            {
+                var cookie = coreWebView.CookieManager.CreateCookie(item.Name, item.Value, item.Domain, item.Path);
+                cookie.IsHttpOnly = item.IsHttpOnly;
+                cookie.IsSecure = item.IsSecure;
+                cookie.SameSite = item.SameSite;
+                cookie.Expires = expiresAt;
+                coreWebView.CookieManager.AddOrUpdateCookie(cookie);
+            }
+        }
+        catch
+        {
+            // Ignore corrupted cookie cache
+        }
+    }
+
+    private void SaveCredentials(string username, string password)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+                return;
+
+            var creds = new SavedCredentials(username.Trim(), password);
+            string json = JsonSerializer.Serialize(creds);
+            byte[] encrypted = ProtectedData.Protect(
+                Encoding.UTF8.GetBytes(json),
+                null,
+                DataProtectionScope.CurrentUser);
+            Directory.CreateDirectory(AppDataFolder);
+            File.WriteAllBytes(SavedCredentialsFilePath, encrypted);
+        }
+        catch
+        {
+            // Ignore
+        }
+    }
+
+    private SavedCredentials? LoadCredentials()
+    {
+        try
+        {
+            if (!File.Exists(SavedCredentialsFilePath))
+                return null;
+
+            byte[] encrypted = File.ReadAllBytes(SavedCredentialsFilePath);
+            byte[] decrypted = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
+            string json = Encoding.UTF8.GetString(decrypted);
+            return JsonSerializer.Deserialize<SavedCredentials>(json);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 서버 세션이 만료되어 /login 화면으로 이동했을 때,
+    /// 이전에 로그인하며 저장된 계정 정보가 있으면 자동으로 입력·로그인합니다.
+    /// </summary>
+    private async Task<bool> TryAutoLoginIfPossibleAsync(CoreWebView2 coreWebView)
+    {
+        if ((DateTime.Now - _lastAutoLoginAttempt).TotalSeconds < 25)
+            return false;
+
+        var creds = LoadCredentials();
+        if (creds == null || string.IsNullOrWhiteSpace(creds.Username) || string.IsNullOrWhiteSpace(creds.Password))
+            return false;
+
+        _lastAutoLoginAttempt = DateTime.Now;
+
+        UpdateSnapshot(new AttendanceSnapshot(
+            CurrentSnapshot.Status,
+            "자동 로그인 중...",
+            "저장된 세션으로 다우오피스 연결 중",
+            CurrentSnapshot.ClockInTimeText,
+            CurrentSnapshot.ClockOutTimeText,
+            CurrentSnapshot.WorkedDurationText,
+            DateTime.Now));
+
+        await Task.Delay(600);
+
+        string userJson = JsonSerializer.Serialize(creds.Username);
+        string passJson = JsonSerializer.Serialize(creds.Password);
+
+        string autoLoginScript = $$"""
+            (() => {
+                const username = {{userJson}};
+                const password = {{passJson}};
+
+                const passInput = document.querySelector('input[type="password"], #password, input[name="password"]');
+                if (!passInput) return 'NO_FORM';
+
+                const userInput = document.querySelector('#username, #userId, #loginId, input[name="username"], input[name="userId"], input[type="text"], input[type="email"]');
+                if (!userInput) return 'NO_USER_INPUT';
+
+                const setNativeValue = (el, val) => {
+                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                    if (setter) setter.call(el, val);
+                    else el.value = val;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                };
+
+                setNativeValue(userInput, username);
+                setNativeValue(passInput, password);
+
+                const loginBtn = document.querySelector('#login_submit, #btnLogin, .btn_login, button[type="submit"], input[type="submit"], a.btn_login');
+                if (loginBtn) {
+                    loginBtn.click();
+                    return 'SUBMITTED';
+                }
+
+                // 텍스트가 '로그인'인 버튼/링크 탐색
+                const candidates = Array.from(document.querySelectorAll('button, a, span, div[role="button"]'));
+                for (const c of candidates) {
+                    if ((c.innerText || '').trim() === '로그인') {
+                        c.click();
+                        return 'SUBMITTED_TEXT';
+                    }
+                }
+
+                const form = passInput.closest('form');
+                if (form) {
+                    form.submit();
+                    return 'FORM_SUBMITTED';
+                }
+                return 'NO_BTN';
+            })();
+            """;
+
+        try
+        {
+            string raw = await coreWebView.ExecuteScriptAsync(autoLoginScript);
+            string res = JsonSerializer.Deserialize<string>(raw) ?? "";
+            return res.StartsWith("SUBMITTED", StringComparison.Ordinal) || res == "FORM_SUBMITTED";
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public static bool IsBlockingSurveyOrPopupUrl(string url)
@@ -253,6 +503,7 @@ public sealed class DaouAttendanceService
             return;
         }
 
+        await PersistSessionCookiesAsync(_webView.CoreWebView2);
         await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
     }
 
@@ -331,7 +582,7 @@ public sealed class DaouAttendanceService
             string? innerJson = JsonSerializer.Deserialize<string>(rawJson);
             if (!string.IsNullOrWhiteSpace(innerJson))
             {
-                ProcessProbeJson(innerJson);
+                ProcessWebMessageJson(innerJson);
             }
         }
         catch
@@ -340,10 +591,26 @@ public sealed class DaouAttendanceService
         }
     }
 
-    private void ProcessProbeJson(string innerJson)
+    private void ProcessWebMessageJson(string innerJson)
     {
         try
         {
+            using var doc = JsonDocument.Parse(innerJson);
+            var root = doc.RootElement;
+
+            // 로그인 폼 제출 시 자격증명(ID/PW) 캡처 메시지인 경우 DPAPI로 암호화 저장
+            if (root.TryGetProperty("msgType", out var msgTypeProp) &&
+                msgTypeProp.GetString() == "LOGIN_CREDENTIALS")
+            {
+                string? user = root.TryGetProperty("username", out var uProp) ? uProp.GetString() : null;
+                string? pass = root.TryGetProperty("password", out var pProp) ? pProp.GetString() : null;
+                if (!string.IsNullOrWhiteSpace(user) && !string.IsNullOrWhiteSpace(pass))
+                {
+                    SaveCredentials(user, pass);
+                }
+                return;
+            }
+
             try
             {
                 File.WriteAllText(LastProbeLogPath, innerJson);
@@ -353,21 +620,23 @@ public sealed class DaouAttendanceService
                 // Ignore file lock
             }
 
-            using var doc = JsonDocument.Parse(innerJson);
-            var root = doc.RootElement;
-
             bool isLogin = root.TryGetProperty("isLoginPage", out var loginProp) && loginProp.GetBoolean();
             if (isLogin)
             {
                 UpdateSnapshot(new AttendanceSnapshot(
                     WorkStatusKind.NeedsLogin,
                     "퇴근 · 로그인 필요",
-                    "클릭하여 다우오피스 로그인",
+                    "클릭하여 다우오피스 로그인 (1회 로그인 시 자동 유지)",
                     null,
                     null,
                     null,
                     DateTime.Now));
                 return;
+            }
+
+            if (_webView?.CoreWebView2 != null)
+            {
+                _ = PersistSessionCookiesAsync(_webView.CoreWebView2);
             }
 
             string state = root.TryGetProperty("state", out var sProp) ? (sProp.GetString() ?? "UNKNOWN") : "UNKNOWN";
@@ -495,6 +764,34 @@ public sealed class DaouAttendanceService
                 }, delayMs);
             };
 
+            // 로그인 폼 제출 시 ID/PW를 캡처하여 이후 앱 재실행/세션 만료 시 자동 로그인에 활용
+            const captureLoginCredentials = () => {
+                try {
+                    const passInput = document.querySelector('input[type="password"], #password, input[name="password"]');
+                    const userInput = document.querySelector('#username, #userId, #loginId, input[name="username"], input[name="userId"], input[type="text"], input[type="email"]');
+                    if (passInput && userInput && userInput.value && passInput.value && window.chrome?.webview?.postMessage) {
+                        window.chrome.webview.postMessage(JSON.stringify({
+                            msgType: 'LOGIN_CREDENTIALS',
+                            username: userInput.value,
+                            password: passInput.value
+                        }));
+                    }
+                } catch {}
+            };
+
+            window.addEventListener('submit', captureLoginCredentials, true);
+            window.addEventListener('click', (e) => {
+                const target = e.target;
+                if (target && document.querySelector('input[type="password"]')) {
+                    captureLoginCredentials();
+                }
+            }, true);
+            window.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && document.querySelector('input[type="password"]')) {
+                    captureLoginCredentials();
+                }
+            }, true);
+
             window.addEventListener('DOMContentLoaded', () => {
                 if (document.body) {
                     const obs = new MutationObserver(() => window.__workdotScheduleProbe(500));
@@ -543,7 +840,6 @@ public sealed class DaouAttendanceService
                     try { if (ifr.contentDocument) docs.push(ifr.contentDocument); } catch {}
                 });
 
-                // 현재 실시간 시계(live clock) 텍스트 감지하여 출근시간 오인 방지
                 const liveClockTimes = new Set();
                 const now = new Date();
                 const pad2 = (n) => String(n).padStart(2, '0');
@@ -574,9 +870,7 @@ public sealed class DaouAttendanceService
                 const todayDot = `${yyyy}.${mm}.${dd}`;
                 const todayCompact = `${yyyy}${mm}${dd}`;
 
-                // -----------------------------------------------------------------
                 // 전략 1: 가로챈 다우오피스 API JSON(__workdotApiLogs)에서 오늘 데이터 추출
-                // -----------------------------------------------------------------
                 if (Array.isArray(window.__workdotApiLogs)) {
                     for (let i = window.__workdotApiLogs.length - 1; i >= 0; i--) {
                         const entry = window.__workdotApiLogs[i];
@@ -629,9 +923,7 @@ public sealed class DaouAttendanceService
                     }
                 }
 
-                // -----------------------------------------------------------------
-                // 전략 2: DOM 탐색 (과거 날짜 테이블 행 및 실시간 시계 제외)
-                // -----------------------------------------------------------------
+                // 전략 2: DOM 탐색
                 const isInsidePastTableRow = (el) => {
                     const tr = el.closest('tr, .tb_row, .timeline_row, [class*="row"]');
                     if (!tr) return false;
@@ -672,7 +964,6 @@ public sealed class DaouAttendanceService
                         }
                     }
 
-                    // 라벨('출근시간'/'출근시각'/'출근', '퇴근시간'/'퇴근시각'/'퇴근')과 인접 형제 탐색
                     const allNodes = Array.from(doc.querySelectorAll('dt, th, span, div, p, strong, label, li'));
                     for (const el of allNodes) {
                         if (isInsidePastTableRow(el)) continue;
@@ -680,7 +971,6 @@ public sealed class DaouAttendanceService
                         const ownText = clean(el.innerText);
                         if (!ownText || ownText.length > 40) continue;
 
-                        // (1) 출근 시간 라벨 매칭 (버튼 '출근하기'는 제외!)
                         if (/^(출근시간|출근시각|출근|업무시작)$/.test(ownText)) {
                             const sib = el.nextElementSibling;
                             if (sib) {
@@ -696,7 +986,6 @@ public sealed class DaouAttendanceService
                             }
                         }
 
-                        // (2) 퇴근 시간 라벨 매칭
                         if (/^(퇴근시간|퇴근시각|퇴근|업무종료)$/.test(ownText)) {
                             const sib = el.nextElementSibling;
                             if (sib) {
@@ -716,7 +1005,6 @@ public sealed class DaouAttendanceService
                         }
                     }
 
-                    // 오늘(today) 테이블 행에서 출근/퇴근 시간 보조 추출
                     const todayRows = Array.from(doc.querySelectorAll('tr.today, .today_row, .tb_attend .today'));
                     for (const row of todayRows) {
                         const rowToCheck = row.closest('tr') || row;
@@ -731,7 +1019,6 @@ public sealed class DaouAttendanceService
                         }
                     }
 
-                    // 화면에 실제로 보이는(offsetParent !== null) 상태 배지만 탐색 (드롭다운 옵션 메뉴 내부 li/option 제외!)
                     const statusEls = Array.from(doc.querySelectorAll(
                         'select option:checked, .state, .status, .badge, .chip, .txt_state, .btn_state'
                     ));
@@ -753,9 +1040,6 @@ public sealed class DaouAttendanceService
                     }
                 }
 
-                // -----------------------------------------------------------------
-                // 3. 출근하기 / 퇴근하기 버튼 활성·비활성 상태 확인 (가장 확실한 지표)
-                // -----------------------------------------------------------------
                 let clockInBtnFound = false;
                 let clockInBtnDisabled = false;
                 let clockOutBtnFound = false;
@@ -797,29 +1081,17 @@ public sealed class DaouAttendanceService
                 const hasValidClockIn = Boolean(clockIn && !clockIn.startsWith('00:00'));
                 const hasValidClockOut = Boolean(clockOut && !clockOut.startsWith('00:00'));
 
-                // -----------------------------------------------------------------
-                // 4. 최종 근무중(WORKING) / 퇴근(OFF_WORK) 판정 (우선순위 정밀화)
-                // -----------------------------------------------------------------
                 let state = 'UNKNOWN';
 
-                // 1순위: 출근하기 버튼은 비활성화(출근 완료)되어 있고 퇴근하기 버튼은 활성화(퇴근 전)되어 있으며 퇴근 시각이 없는 경우 -> 100% 근무중!
                 if (clockInBtnFound && clockInBtnDisabled && clockOutBtnFound && !clockOutBtnDisabled && !hasValidClockOut) {
                     state = 'WORKING';
-                }
-                // 2순위: 출근 시각이 찍혀 있고 퇴근 시각이 아직 없는 경우 -> 근무중!
-                else if (hasValidClockIn && !hasValidClockOut) {
+                } else if (hasValidClockIn && !hasValidClockOut) {
                     state = 'WORKING';
-                }
-                // 3순위: 퇴근 시각이 찍혀 있거나, 출근/퇴근 버튼이 둘 다 비활성화된 경우 -> 퇴근!
-                else if (hasValidClockOut || (clockInBtnFound && clockInBtnDisabled && clockOutBtnFound && clockOutBtnDisabled)) {
+                } else if (hasValidClockOut || (clockInBtnFound && clockInBtnDisabled && clockOutBtnFound && clockOutBtnDisabled)) {
                     state = 'OFF_WORK';
-                }
-                // 4순위: 출근하기 버튼이 활성화되어 있는 경우 (아직 출근 전) -> 퇴근(미출근)!
-                else if (clockInBtnFound && !clockInBtnDisabled) {
+                } else if (clockInBtnFound && !clockInBtnDisabled) {
                     state = 'OFF_WORK';
-                }
-                // 5순위: API 상태값 또는 화면 배지 텍스트
-                else {
+                } else {
                     const combinedStatus = ((apiStatus || '') + ' ' + (badgeText || '')).toUpperCase();
                     if (combinedStatus.includes('WORKING') || combinedStatus.includes('WORK_IN') || combinedStatus.includes('ON_WORK') ||
                         combinedStatus.includes('근무중') || combinedStatus.includes('근무 중') ||
@@ -902,7 +1174,7 @@ public sealed class DaouAttendanceService
             for (const btn of modalBtns) {
                 const t = clean(btn.innerText);
                 if (t === '확인' || t === '예' || t === '출근' || t === '퇴근') {
-                    el.click();
+                    btn.click();
                     return 'CONFIRMED';
                 }
             }
