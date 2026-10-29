@@ -2,17 +2,19 @@
 
 다우오피스(DaouOffice) 근태 현황을 실시간으로 동기화하고 화면 경계에 깔끔하게 고정해 사용하는 Windows 미니 오버레이 위젯입니다.
 
-- **최신 버전**: `v1.5.4`
+- **최신 버전**: `v1.5.5`
 - **저장소**: https://github.com/aline-taiyo/WorkDot
-- **최신 릴리즈 다운로드**: https://github.com/aline-taiyo/WorkDot/releases/latest
+- **최신 릴리즈 설치 파일(`WorkDot-Setup-win-x64.msi`)**: https://github.com/aline-taiyo/WorkDot/releases/latest
 
 ---
 
-## 1. 시작 및 다우오피스 연동
+## 1. 설치 및 다우오피스 연동
 
-1. `WorkDot.exe`를 실행하면 화면 우측 하단(작업 표시줄 위 경계)에 미니 위젯이 표시됩니다.
+1. [GitHub Releases](https://github.com/aline-taiyo/WorkDot/releases/latest)에서 **`WorkDot-Setup-win-x64.msi`** 설치 파일을 다운로드하여 실행합니다.
+   - 설치 완료 시 바탕화면 및 시작 메뉴에 **WorkDot** 바로가기 아이콘이 생성됩니다 (`%LOCALAPPDATA%\Programs\WorkDot\WorkDot.exe`).
+2. `WorkDot`을 실행하면 화면 우측 하단(작업 표시줄 위 경계)에 미니 위젯이 표시됩니다.
    - 작업 표시줄에는 아이콘이 노출되지 않으며, **시스템 트레이(트레이 아이콘)** 및 오버레이 위젯으로만 동작합니다.
-2. 최초 실행 시(또는 로그인이 필요한 경우):
+3. 최초 실행 시(또는 로그인이 필요한 경우):
    - 위젯에 마우스를 올려 확장된 아이콘 바에서 **홈(브라우저 열기)** 버튼을 클릭하거나, 위젯 우클릭 메뉴에서 **`브라우저 열기`**를 선택합니다.
    - 내장된 다우오피스 창에서 **1회 로그인**하면 세션 쿠키와 계정 정보가 Windows DPAPI로 안전하게 암호화 저장되어 이후 재실행 시에도 자동으로 로그인·동기화됩니다.
 
@@ -87,11 +89,11 @@ dotnet build WorkDot.slnx -c Release
 .\run.bat
 ```
 
-### 새 버전 GitHub Release 배포
+### 새 버전 GitHub Release (MSI) 배포
 1. `src/WorkDot/WorkDot.csproj`의 `<Version>`을 올리고 커밋합니다.
-2. 태그를 생성하여 GitHub에 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 자동으로 `WorkDot-win-x64.zip`을 빌드해 **GitHub Releases**에 게시합니다:
+2. 태그를 생성하여 GitHub에 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 자동으로 `WorkDot-Setup-win-x64.msi`를 빌드해 **GitHub Releases**에 게시합니다:
    ```powershell
-   git tag v1.5.4
+   git tag v1.5.5
    git push origin main --tags
    ```
-3. 로컬에서 배포용 ZIP 파일(`dist\WorkDot-win-x64.zip`)을 직접 생성하려면 `.\publish-release.bat`를 실행합니다.
+3. 로컬에서 설치용 MSI 파일(`dist\WorkDot-Setup-win-x64.msi`)을 직접 빌드하려면 `.\publish-release.bat`를 실행합니다.

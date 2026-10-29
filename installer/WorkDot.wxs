@@ -1,0 +1,64 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="WorkDot"
+           Manufacturer="AlineStudio"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="8D4E9C21-5A3B-4F8E-9C12-7B6A5E4D3C21"
+           Scope="perUser"
+           Language="1033"
+           Codepage="65001"
+           Compressed="yes">
+
+    <SummaryInformation Description="WorkDot Desktop Attendance Overlay Widget"
+                        Manufacturer="AlineStudio" />
+
+    <MajorUpgrade DowngradeErrorMessage="이미 더 최신 버전의 WorkDot이 설치되어 있습니다."
+                  Schedule="afterInstallInitialize" />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="WorkDotIcon" SourceFile="src\WorkDot\Assets\Icons\workdot.ico" />
+    <Property Id="ARPPRODUCTICON" Value="WorkDotIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/aline-taiyo/WorkDot" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="WorkDot" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppProgramMenuFolder" Name="WorkDot" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder" />
+
+    <Feature Id="MainFeature" Title="WorkDot" Level="1">
+      <Files Directory="INSTALLFOLDER" Include="..\dist\publish\**" />
+      <ComponentRef Id="AppShortcutsComponent" />
+    </Feature>
+
+    <Component Id="AppShortcutsComponent" Directory="AppProgramMenuFolder" Guid="6F7B8C91-4E2A-4D3C-8B19-9A1E2F3D4C5B">
+      <Shortcut Id="StartMenuShortcut"
+                Name="WorkDot"
+                Description="WorkDot 다우오피스 근태 오버레이 위젯"
+                Target="[INSTALLFOLDER]WorkDot.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="WorkDotIcon" />
+      <Shortcut Id="DesktopShortcut"
+                Directory="DesktopFolder"
+                Name="WorkDot"
+                Description="WorkDot 다우오피스 근태 오버레이 위젯"
+                Target="[INSTALLFOLDER]WorkDot.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="WorkDotIcon" />
+      <RemoveFolder Id="CleanUpStartMenuFolder" Directory="AppProgramMenuFolder" On="uninstall" />
+      <RegistryValue Root="HKCU"
+                     Key="Software\AlineStudio\WorkDot"
+                     Name="Installed"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+
+  </Package>
+</Wix>

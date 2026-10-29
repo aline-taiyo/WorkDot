@@ -125,13 +125,14 @@ public sealed class AutoUpdateService : IDisposable
                     if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(url))
                         continue;
 
-                    if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
+                    if (name.EndsWith(".msi", StringComparison.OrdinalIgnoreCase) ||
+                        name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
                         name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
                     {
                         assetName = name;
                         downloadUrl = url;
-                        if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-                            break; // zip 패키지 우선
+                        if (name.EndsWith(".msi", StringComparison.OrdinalIgnoreCase))
+                            break; // msi 설치 패키지 최우선
                     }
                 }
             }
@@ -186,42 +187,68 @@ public sealed class AutoUpdateService : IDisposable
                 await resp.Content.CopyToAsync(fs);
             }
 
-            string stagingDir = Path.Combine(updateRoot, "staging");
-            Directory.CreateDirectory(stagingDir);
+            string appDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string currentExe = Environment.ProcessPath ?? Path.Combine(appDir, "WorkDot.exe");
+            string msiInstalledExe = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Programs",
+                "WorkDot",
+                "WorkDot.exe");
+            int currentPid = Environment.ProcessId;
+            string scriptPath = Path.Combine(updateRoot, "apply-update.cmd");
 
-            if (assetName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            if (assetName.EndsWith(".msi", StringComparison.OrdinalIgnoreCase))
             {
-                UpdateStatus("업데이트 압축 해제 중...");
-                ZipFile.ExtractToDirectory(downloadedFile, stagingDir, overwriteFiles: true);
+                string msiScriptContent = $"""
+                    @echo off
+                    chcp 65001 >nul
+                    timeout /t 2 /nobreak >nul
+                    taskkill /PID {currentPid} /F >nul 2>&1
+                    timeout /t 1 /nobreak >nul
+                    msiexec.exe /i "{downloadedFile}" /passive /norestart
+                    if exist "{msiInstalledExe}" (
+                        start "" "{msiInstalledExe}"
+                    ) else (
+                        start "" "{currentExe}"
+                    )
+                    exit
+                    """;
+
+                File.WriteAllText(scriptPath, msiScriptContent, new UTF8Encoding(false));
             }
             else
             {
-                File.Copy(downloadedFile, Path.Combine(stagingDir, "WorkDot.exe"), overwrite: true);
+                string stagingDir = Path.Combine(updateRoot, "staging");
+                Directory.CreateDirectory(stagingDir);
+
+                if (assetName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    UpdateStatus("업데이트 압축 해제 중...");
+                    ZipFile.ExtractToDirectory(downloadedFile, stagingDir, overwriteFiles: true);
+                }
+                else
+                {
+                    File.Copy(downloadedFile, Path.Combine(stagingDir, "WorkDot.exe"), overwrite: true);
+                }
+
+                string[] exeFiles = Directory.GetFiles(stagingDir, "WorkDot.exe", SearchOption.AllDirectories);
+                string sourceDir = exeFiles.Length > 0
+                    ? (Path.GetDirectoryName(exeFiles[0]) ?? stagingDir)
+                    : stagingDir;
+
+                string zipScriptContent = $"""
+                    @echo off
+                    chcp 65001 >nul
+                    timeout /t 2 /nobreak >nul
+                    taskkill /PID {currentPid} /F >nul 2>&1
+                    timeout /t 1 /nobreak >nul
+                    xcopy "{sourceDir}\*" "{appDir}\" /E /Y /I /Q >nul 2>&1
+                    start "" "{currentExe}"
+                    exit
+                    """;
+
+                File.WriteAllText(scriptPath, zipScriptContent, new UTF8Encoding(false));
             }
-
-            // 하위 폴더 하나 안에 압축된 경우 루트로 보정
-            string[] exeFiles = Directory.GetFiles(stagingDir, "WorkDot.exe", SearchOption.AllDirectories);
-            string sourceDir = exeFiles.Length > 0
-                ? (Path.GetDirectoryName(exeFiles[0]) ?? stagingDir)
-                : stagingDir;
-
-            string appDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            string currentExe = Environment.ProcessPath ?? Path.Combine(appDir, "WorkDot.exe");
-            int currentPid = Environment.ProcessId;
-
-            string scriptPath = Path.Combine(updateRoot, "apply-update.cmd");
-            string scriptContent = $"""
-                @echo off
-                chcp 65001 >nul
-                timeout /t 2 /nobreak >nul
-                taskkill /PID {currentPid} /F >nul 2>&1
-                timeout /t 1 /nobreak >nul
-                xcopy "{sourceDir}\*" "{appDir}\" /E /Y /I /Q >nul 2>&1
-                start "" "{currentExe}"
-                exit
-                """;
-
-            File.WriteAllText(scriptPath, scriptContent, new UTF8Encoding(false));
 
             UpdateStatus("업데이트 적용 및 재시작 중...");
             Process.Start(new ProcessStartInfo("cmd.exe", $"/c \"\"{scriptPath}\"\"")
