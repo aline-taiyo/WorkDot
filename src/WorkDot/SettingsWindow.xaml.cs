@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using WorkDot.Services;
 
 namespace WorkDot;
@@ -12,7 +13,9 @@ public partial class SettingsWindow : Window
 {
     private readonly AppSettingsService _settingsService;
     private readonly AutoUpdateService _autoUpdateService;
+    private readonly DispatcherTimer _feedbackResetTimer;
     private bool _isLoadingUi = true;
+    private bool _isManualChecking;
 
     public SettingsWindow(AppSettingsService settingsService, AutoUpdateService autoUpdateService)
     {
@@ -22,12 +25,26 @@ public partial class SettingsWindow : Window
 
         InitializeComponent();
 
+        _feedbackResetTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(3.5)
+        };
+        _feedbackResetTimer.Tick += (_, _) =>
+        {
+            _feedbackResetTimer.Stop();
+            ResetCheckUpdateButtonVisual();
+        };
+
         string version = AppSettingsService.AppVersion;
         VersionBadgeText.Text = version;
         CheckUpdateButton.ToolTip = _autoUpdateService.LastStatusMessage;
 
         _autoUpdateService.StatusChanged += OnAutoUpdateStatusChanged;
-        Closed += (_, _) => _autoUpdateService.StatusChanged -= OnAutoUpdateStatusChanged;
+        Closed += (_, _) =>
+        {
+            _feedbackResetTimer.Stop();
+            _autoUpdateService.StatusChanged -= OnAutoUpdateStatusChanged;
+        };
 
         LoadSettingsIntoUi();
     }
@@ -39,8 +56,35 @@ public partial class SettingsWindow : Window
             if (CheckUpdateButton != null)
             {
                 CheckUpdateButton.ToolTip = status;
+                if (_isManualChecking)
+                {
+                    CheckUpdateButton.Content = status;
+                }
             }
         });
+    }
+
+    private void ResetCheckUpdateButtonVisual()
+    {
+        if (CheckUpdateButton == null)
+            return;
+
+        CheckUpdateButton.Content = "업데이트 확인";
+        CheckUpdateButton.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E4E4E7"));
+        CheckUpdateButton.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#27272A"));
+    }
+
+    private void ShowCheckUpdateFeedback(string text, string colorHex)
+    {
+        if (CheckUpdateButton == null)
+            return;
+
+        var c = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(colorHex);
+        CheckUpdateButton.Content = text;
+        CheckUpdateButton.Foreground = new SolidColorBrush(c);
+        CheckUpdateButton.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb(140, c.R, c.G, c.B));
+        _feedbackResetTimer.Stop();
+        _feedbackResetTimer.Start();
     }
 
     private void OnTitleBarMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -196,10 +240,15 @@ public partial class SettingsWindow : Window
 
     private async void OnCheckUpdateClick(object sender, RoutedEventArgs e)
     {
-        if (CheckUpdateButton == null)
+        if (CheckUpdateButton == null || _isManualChecking)
             return;
 
+        _feedbackResetTimer.Stop();
+        _isManualChecking = true;
         CheckUpdateButton.IsEnabled = false;
+        CheckUpdateButton.Content = "릴리즈 확인 중...";
+        CheckUpdateButton.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#A1A1AA"));
+
         try
         {
             var result = await _autoUpdateService.CheckForUpdateAsync();
@@ -207,10 +256,16 @@ public partial class SettingsWindow : Window
             {
                 if (!string.IsNullOrWhiteSpace(result.DownloadUrl) && !string.IsNullOrWhiteSpace(result.AssetName))
                 {
-                    await _autoUpdateService.DownloadAndApplyUpdateAsync(result.DownloadUrl, result.AssetName);
+                    ShowCheckUpdateFeedback($"업데이트 중 ({result.LatestVersionTag})...", "#10B981");
+                    bool ok = await _autoUpdateService.DownloadAndApplyUpdateAsync(result.DownloadUrl, result.AssetName);
+                    if (!ok)
+                    {
+                        ShowCheckUpdateFeedback("업데이트 적용 실패", "#EF4444");
+                    }
                 }
                 else
                 {
+                    ShowCheckUpdateFeedback($"새 버전 {result.LatestVersionTag} (페이지 이동)", "#10B981");
                     try
                     {
                         Process.Start(new ProcessStartInfo(AutoUpdateService.GitHubReleasesUrl)
@@ -224,9 +279,22 @@ public partial class SettingsWindow : Window
                     }
                 }
             }
+            else if (result.Message.Contains("릴리스 없음", StringComparison.Ordinal))
+            {
+                ShowCheckUpdateFeedback("배포된 릴리즈 없음", "#F59E0B");
+            }
+            else if (result.Message.Contains("실패", StringComparison.Ordinal))
+            {
+                ShowCheckUpdateFeedback("업데이트 확인 실패", "#EF4444");
+            }
+            else
+            {
+                ShowCheckUpdateFeedback($"최신 버전입니다 ({result.CurrentVersionTag})", "#10B981");
+            }
         }
         finally
         {
+            _isManualChecking = false;
             CheckUpdateButton.IsEnabled = true;
         }
     }
