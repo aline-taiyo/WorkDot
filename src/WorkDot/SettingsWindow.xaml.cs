@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
@@ -10,11 +11,13 @@ namespace WorkDot;
 public partial class SettingsWindow : Window
 {
     private readonly AppSettingsService _settingsService;
+    private readonly AutoUpdateService _autoUpdateService;
     private bool _isLoadingUi = true;
 
-    public SettingsWindow(AppSettingsService settingsService)
+    public SettingsWindow(AppSettingsService settingsService, AutoUpdateService autoUpdateService)
     {
         _settingsService = settingsService;
+        _autoUpdateService = autoUpdateService;
         _isLoadingUi = true;
 
         InitializeComponent();
@@ -22,8 +25,23 @@ public partial class SettingsWindow : Window
         string version = AppSettingsService.AppVersion;
         VersionBadgeText.Text = version;
         FooterVersionText.Text = $"WorkDot {version}";
+        UpdateStatusText.Text = _autoUpdateService.LastStatusMessage;
+
+        _autoUpdateService.StatusChanged += OnAutoUpdateStatusChanged;
+        Closed += (_, _) => _autoUpdateService.StatusChanged -= OnAutoUpdateStatusChanged;
 
         LoadSettingsIntoUi();
+    }
+
+    private void OnAutoUpdateStatusChanged(string status)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            if (UpdateStatusText != null)
+            {
+                UpdateStatusText.Text = status;
+            }
+        });
     }
 
     private void OnTitleBarMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -59,6 +77,7 @@ public partial class SettingsWindow : Window
 
             AlwaysOnTopCheck.IsChecked = s.AlwaysOnTop;
             RunAtStartupCheck.IsChecked = s.RunAtStartup;
+            AutoUpdateCheck.IsChecked = s.AutoUpdateEnabled;
         }
         finally
         {
@@ -166,12 +185,56 @@ public partial class SettingsWindow : Window
 
         bool topMost = AlwaysOnTopCheck.IsChecked == true;
         bool startup = RunAtStartupCheck.IsChecked == true;
+        bool autoUpdate = AutoUpdateCheck.IsChecked == true;
 
         _settingsService.SaveAndApply(s =>
         {
             s.AlwaysOnTop = topMost;
             s.RunAtStartup = startup;
+            s.AutoUpdateEnabled = autoUpdate;
         });
+    }
+
+    private async void OnCheckUpdateClick(object sender, RoutedEventArgs e)
+    {
+        if (CheckUpdateButton == null)
+            return;
+
+        CheckUpdateButton.IsEnabled = false;
+        try
+        {
+            var result = await _autoUpdateService.CheckForUpdateAsync();
+            if (result.IsUpdateAvailable)
+            {
+                if (!string.IsNullOrWhiteSpace(result.DownloadUrl) && !string.IsNullOrWhiteSpace(result.AssetName))
+                {
+                    await _autoUpdateService.DownloadAndApplyUpdateAsync(result.DownloadUrl, result.AssetName);
+                }
+                else
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo(AutoUpdateService.GitHubReleasesUrl)
+                        {
+                            UseShellExecute = true
+                        });
+                    }
+                    catch
+                    {
+                        // Ignore
+                    }
+                }
+            }
+        }
+        finally
+        {
+            CheckUpdateButton.IsEnabled = true;
+        }
+    }
+
+    private void OnOpenGitHubRepoClick(object sender, RoutedEventArgs e)
+    {
+        AutoUpdateService.OpenGitHubRepository();
     }
 
     private void OnResetDefaultsClick(object sender, RoutedEventArgs e)

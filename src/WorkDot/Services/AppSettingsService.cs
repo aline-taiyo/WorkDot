@@ -24,8 +24,9 @@ public sealed class AppSettings
     public double WidgetOpacity { get; set; } = 0.95;        // 0.25 ~ 1.0
     public double WidgetScale { get; set; } = 1.0;           // 0.70 ~ 1.60
     public bool AlwaysOnTop { get; set; } = true;
-    public bool ShowInTaskbar { get; set; } = true;          // 작업표시줄 아이콘 표시 여부
+    public bool ShowInTaskbar { get; set; } = false;         // 작업표시줄 아이콘 표시 여부
     public bool RunAtStartup { get; set; } = false;
+    public bool AutoUpdateEnabled { get; set; } = true;      // GitHub Release 자동 업데이트 활성화 여부
 }
 
 public sealed class AppSettingsService : IDisposable

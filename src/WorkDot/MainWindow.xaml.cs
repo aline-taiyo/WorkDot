@@ -14,21 +14,20 @@ public partial class MainWindow : Window
     private const double IdleSecondsBeforeShowingElapsed = 10.0;
 
     private readonly AppSettingsService _settingsService;
+    private readonly AutoUpdateService _autoUpdateService;
     private readonly Win32SnapService _snapService;
     private readonly DaouAttendanceService _attendanceService;
     private readonly TaskbarTrayService _trayService;
     private readonly DispatcherTimer _pollTimer;
     private readonly DispatcherTimer _confirmResetTimer;
     private readonly DispatcherTimer _idleTimer;
+    private readonly DispatcherTimer _hoverCollapseTimer;
 
     private AttendanceWebWindow? _portalWindow;
     private SettingsWindow? _settingsWindow;
 
     private bool _isPointerDown;
     private bool _hasMovedDuringDrag;
-    private System.Windows.Point _dragStartScreenPoint;
-    private double _windowStartLeft;
-    private double _windowStartTop;
     private bool _isActionBusy;
     private bool _isAwaitingInlineConfirm;
     private DateTime _lastInteractionUtc = DateTime.UtcNow;
@@ -41,6 +40,7 @@ public partial class MainWindow : Window
         ShowInTaskbar = false;
 
         _settingsService = new AppSettingsService();
+        _autoUpdateService = new AutoUpdateService(_settingsService);
         _snapService = new Win32SnapService(this);
         _attendanceService = new DaouAttendanceService();
         _trayService = new TaskbarTrayService();
@@ -74,19 +74,38 @@ public partial class MainWindow : Window
             ApplySettingsAndVisuals();
         };
 
-        // 1초 주기로 위젯 비활성(10초 이상 미조작) 상태를 체크하여 (현재시간 - 출근시간) 표시를 갱신
+        // 1초 주기로 위젯 비활성(10초 이상 미조작) 상태를 체크하여 (현재시간 - 출근시간, 휴게시간 제외) 표시를 갱신
         _idleTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromSeconds(1)
         };
         _idleTimer.Tick += OnIdleTimerTick;
 
+        // 화면 경계에서 마우스 커서가 미세하게 흔들릴 때 확장/축소가 떨리지 않도록 디바운스 버퍼 적용
+        _hoverCollapseTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(180)
+        };
+        _hoverCollapseTimer.Tick += (_, _) =>
+        {
+            _hoverCollapseTimer.Stop();
+            if (!_isPointerDown && !IsMouseOver && !OverlayContextMenu.IsOpen)
+            {
+                _isAwaitingInlineConfirm = false;
+                _confirmResetTimer.Stop();
+                SetExpandedMode(false);
+                ApplySettingsAndVisuals();
+            }
+        };
+
         Loaded += OnMainWindowLoaded;
         Closed += (_, _) =>
         {
+            _hoverCollapseTimer.Stop();
             _idleTimer.Stop();
             _pollTimer.Stop();
             _confirmResetTimer.Stop();
+            _autoUpdateService.Dispose();
             _portalWindow?.ShutdownClose();
             _trayService.Dispose();
             _snapService.Dispose();
@@ -115,6 +134,7 @@ public partial class MainWindow : Window
         _snapService.Initialize();
         _snapService.SnapToTaskbarDefault();
         _idleTimer.Start();
+        _autoUpdateService.StartBackgroundSchedule();
 
         try
         {
@@ -225,7 +245,7 @@ public partial class MainWindow : Window
             ? $"근무중 ({elapsedText}) · {snapshot.SubText}"
             : $"{(isWorking ? "근무중" : "퇴근")} · {snapshot.SubText}";
 
-        // 2. 드래그 중에는 무조건 미니모드(텍스트 숨김), 평소에는 10초 이상 미조작 시에만 근무중인 시간(현재시간 - 출근시간) 표시
+        // 2. 드래그 중에는 무조건 미니모드(텍스트 숨김), 평소에는 10초 이상 미조작 시에만 근무중인 시간 표시
         if (_hasMovedDuringDrag)
         {
             SubStatusText.Text = string.Empty;
@@ -333,17 +353,14 @@ public partial class MainWindow : Window
     private void OnOverlayMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         RecordInteraction();
+        _hoverCollapseTimer.Stop();
 
         if (e.OriginalSource is DependencyObject dep && IsInsideButton(dep))
             return;
 
         _isPointerDown = true;
         _hasMovedDuringDrag = false;
-        _dragStartScreenPoint = PointToScreen(e.GetPosition(this));
-        _windowStartLeft = Left;
-        _windowStartTop = Top;
-
-        _snapService.IsDraggingOverlay = true;
+        _snapService.BeginDrag();
         ((UIElement)sender).CaptureMouse();
     }
 
@@ -354,15 +371,7 @@ public partial class MainWindow : Window
         if (!_isPointerDown)
             return;
 
-        System.Windows.Point currentScreenPoint = PointToScreen(e.GetPosition(this));
-        var source = PresentationSource.FromVisual(this);
-        double scaleX = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-        double scaleY = source?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
-
-        double deltaX = (currentScreenPoint.X - _dragStartScreenPoint.X) / scaleX;
-        double deltaY = (currentScreenPoint.Y - _dragStartScreenPoint.Y) / scaleY;
-
-        if (!_hasMovedDuringDrag && (Math.Abs(deltaX) > 3 || Math.Abs(deltaY) > 3))
+        if (!_hasMovedDuringDrag && _snapService.HasExceededDragThreshold())
         {
             _hasMovedDuringDrag = true;
 
@@ -370,13 +379,12 @@ public partial class MainWindow : Window
             ActionPanel.Visibility = Visibility.Collapsed;
             SubStatusText.Visibility = Visibility.Collapsed;
             UpdateLayout();
+            _snapService.AdjustDragOriginAfterMiniCollapse();
         }
 
         if (_hasMovedDuringDrag)
         {
-            Left = _windowStartLeft + deltaX;
-            Top = _windowStartTop + deltaY;
-            _snapService.EvaluateMagneticSnap(applyPosition: true);
+            _snapService.UpdateDragPositionFromCursor();
         }
     }
 
@@ -419,6 +427,7 @@ public partial class MainWindow : Window
     private void OnOverlayMouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
     {
         RecordInteraction();
+        _hoverCollapseTimer.Stop();
 
         if (!_isPointerDown)
         {
@@ -432,10 +441,8 @@ public partial class MainWindow : Window
 
         if (!_isPointerDown)
         {
-            _isAwaitingInlineConfirm = false;
-            _confirmResetTimer.Stop();
-            SetExpandedMode(false);
-            ApplySettingsAndVisuals();
+            _hoverCollapseTimer.Stop();
+            _hoverCollapseTimer.Start();
         }
     }
 
@@ -519,6 +526,7 @@ public partial class MainWindow : Window
     private void OnContextMenuOpened(object sender, RoutedEventArgs e)
     {
         RecordInteraction();
+        _hoverCollapseTimer.Stop();
         OverlayContextMenu.Placement = PlacementMode.MousePoint;
         MenuAlwaysOnTop.IsChecked = _settingsService.Current.AlwaysOnTop;
         MenuRunAtStartup.IsChecked = _settingsService.Current.RunAtStartup;
@@ -534,7 +542,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _settingsWindow = new SettingsWindow(_settingsService);
+        _settingsWindow = new SettingsWindow(_settingsService, _autoUpdateService);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
     }

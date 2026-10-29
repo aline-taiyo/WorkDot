@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="환경설정"
-        Width="440" Height="560"
+        Width="440" Height="640"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -125,7 +125,7 @@
                                     Margin="8,0,0,0"
                                     VerticalAlignment="Center">
                                 <TextBlock x:Name="VersionBadgeText"
-                                           Text="v1.4.0"
+                                           Text="v1.5.0"
                                            FontFamily="{StaticResource SansFont}"
                                            Foreground="#A1A1AA"
                                            FontSize="11"
@@ -133,7 +133,7 @@
                             </Border>
                         </StackPanel>
 
-                        <TextBlock Text="위젯의 테마, 상태 색상 및 동작 옵션을 설정합니다."
+                        <TextBlock Text="위젯의 테마, 상태 색상 및 업데이트 옵션을 설정합니다."
                                    FontFamily="{StaticResource SansFont}"
                                    FontSize="12"
                                    Foreground="#71717A"
@@ -309,8 +309,8 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- 4. Behavior Switches -->
-                    <Border Style="{StaticResource ShadcnCardStyle}" Margin="0">
+                    <!-- 4. Behavior & Auto-Update Switches -->
+                    <Border Style="{StaticResource ShadcnCardStyle}">
                         <StackPanel>
                             <CheckBox x:Name="AlwaysOnTopCheck"
                                       Style="{StaticResource ModernToggleSwitchStyle}"
@@ -327,6 +327,7 @@
 
                             <CheckBox x:Name="RunAtStartupCheck"
                                       Style="{StaticResource ModernToggleSwitchStyle}"
+                                      Margin="0,0,0,10"
                                       Checked="OnBehaviorCheckChanged"
                                       Unchecked="OnBehaviorCheckChanged">
                                 <StackPanel>
@@ -334,7 +335,65 @@
                                     <TextBlock Text="PC 시작 시 WorkDot을 자동으로 실행합니다." FontSize="11.5" Foreground="#71717A" Margin="0,1,0,0"/>
                                 </StackPanel>
                             </CheckBox>
+
+                            <Border Height="1" Background="#1F1F23" Margin="0,0,0,10"/>
+
+                            <CheckBox x:Name="AutoUpdateCheck"
+                                      Style="{StaticResource ModernToggleSwitchStyle}"
+                                      Checked="OnBehaviorCheckChanged"
+                                      Unchecked="OnBehaviorCheckChanged">
+                                <StackPanel>
+                                    <TextBlock Text="GitHub 릴리스 자동 업데이트" FontSize="13" FontWeight="Medium" Foreground="#FAFAFA"/>
+                                    <TextBlock Text="새 버전 배포 시 백그라운드에서 자동으로 업데이트합니다." FontSize="11.5" Foreground="#71717A" Margin="0,1,0,0"/>
+                                </StackPanel>
+                            </CheckBox>
                         </StackPanel>
+                    </Border>
+
+                    <!-- 5. GitHub Repository & Manual Update Check -->
+                    <Border Style="{StaticResource ShadcnCardStyle}" Margin="0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0">
+                                <TextBlock Text="GitHub 저장소 및 업데이트"
+                                           FontFamily="{StaticResource SansFont}"
+                                           FontSize="13"
+                                           FontWeight="SemiBold"
+                                           Foreground="#FAFAFA"/>
+                                <TextBlock x:Name="UpdateStatusText"
+                                           Text="github.com/xl-taiyo/WorkDot"
+                                           FontFamily="{StaticResource SansFont}"
+                                           FontSize="11.5"
+                                           Foreground="#71717A"
+                                           TextTrimming="CharacterEllipsis"
+                                           Margin="0,2,0,0"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button x:Name="CheckUpdateButton"
+                                        Style="{StaticResource ModernActionBtnStyle}"
+                                        Content="업데이트 확인"
+                                        Background="#18181B"
+                                        BorderBrush="#27272A"
+                                        Foreground="#E4E4E7"
+                                        Padding="10,5"
+                                        Margin="0,0,6,0"
+                                        Click="OnCheckUpdateClick"/>
+
+                                <Button Style="{StaticResource ModernActionBtnStyle}"
+                                        Content="GitHub 열기"
+                                        Background="#18181B"
+                                        BorderBrush="#27272A"
+                                        Foreground="#FAFAFA"
+                                        Padding="10,5"
+                                        ToolTip="https://github.com/xl-taiyo/WorkDot 브라우저로 열기"
+                                        Click="OnOpenGitHubRepoClick"/>
+                            </StackPanel>
+                        </Grid>
                     </Border>
 
                 </StackPanel>
@@ -366,7 +425,7 @@
                             HorizontalAlignment="Right"/>
 
                     <TextBlock x:Name="FooterVersionText"
-                               Text="WorkDot v1.4.0"
+                               Text="WorkDot v1.5.0"
                                FontFamily="{StaticResource SansFont}"
                                Foreground="#52525B"
                                FontSize="11.5"
