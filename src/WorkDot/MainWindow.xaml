@@ -21,10 +21,6 @@
                     ImageSource="pack://application:,,,/Assets/Icons/icons8-crescent-moon-96.png"
                     Stretch="Uniform"
                     RenderOptions.BitmapScalingMode="HighQuality"/>
-        <ImageBrush x:Key="BrushIconShutdown"
-                    ImageSource="pack://application:,,,/Assets/Icons/icons8-shutdown-96.png"
-                    Stretch="Uniform"
-                    RenderOptions.BitmapScalingMode="HighQuality"/>
         <ImageBrush x:Key="BrushIconHome"
                     ImageSource="pack://application:,,,/Assets/Icons/icons8-home-96.png"
                     Stretch="Uniform"
@@ -132,18 +128,6 @@
                             Background="#27272A"
                             Margin="6,0,4,0"
                             VerticalAlignment="Center"/>
-
-                    <!-- Shutdown / Power Button (출근 / 퇴근하기) -->
-                    <Button x:Name="PrimaryActionButton"
-                            Style="{StaticResource ModernIconBtnStyle}"
-                            ToolTip="퇴근"
-                            Click="OnPrimaryActionClick"
-                            Margin="0,0,1,0">
-                        <Rectangle Width="15" Height="15"
-                                   Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                   OpacityMask="{StaticResource BrushIconShutdown}"
-                                   RenderOptions.BitmapScalingMode="HighQuality"/>
-                    </Button>
 
                     <!-- Home Button (브라우저 열기) -->
                     <Button x:Name="PortalIconButton"

@@ -12,6 +12,7 @@ namespace WorkDot;
 public partial class MainWindow : Window
 {
     private const double IdleSecondsBeforeShowingElapsed = 10.0;
+    private const double LongPressHoldMs = 450.0;
 
     private readonly AppSettingsService _settingsService;
     private readonly AutoUpdateService _autoUpdateService;
@@ -19,7 +20,7 @@ public partial class MainWindow : Window
     private readonly DaouAttendanceService _attendanceService;
     private readonly TaskbarTrayService _trayService;
     private readonly DispatcherTimer _pollTimer;
-    private readonly DispatcherTimer _confirmResetTimer;
+    private readonly DispatcherTimer _longPressTimer;
     private readonly DispatcherTimer _idleTimer;
     private readonly DispatcherTimer _hoverCollapseTimer;
 
@@ -28,8 +29,10 @@ public partial class MainWindow : Window
 
     private bool _isPointerDown;
     private bool _hasMovedDuringDrag;
+    private bool _isPressOnStatusIcon;
+    private bool _isLongPressArmed;
+    private bool _isCursorInsideDuringLongPress;
     private bool _isActionBusy;
-    private bool _isAwaitingInlineConfirm;
     private DateTime _lastInteractionUtc = DateTime.UtcNow;
     private bool _isIdleElapsedVisible;
 
@@ -49,11 +52,7 @@ public partial class MainWindow : Window
         MenuVersionHeader.Header = $"WorkDot {ver}";
 
         _settingsService.SettingsChanged += _ => Dispatcher.Invoke(ApplySettingsAndVisuals);
-        _attendanceService.SnapshotChanged += _ => Dispatcher.Invoke(() =>
-        {
-            _isAwaitingInlineConfirm = false;
-            ApplySettingsAndVisuals();
-        });
+        _attendanceService.SnapshotChanged += _ => Dispatcher.Invoke(ApplySettingsAndVisuals);
 
         WireTrayEvents();
 
@@ -63,20 +62,12 @@ public partial class MainWindow : Window
         };
         _pollTimer.Tick += async (_, _) => await _attendanceService.RefreshStatusAsync();
 
-        _confirmResetTimer = new DispatcherTimer
+        // 상태 아이콘 롱프레스(꾹 누르기) 감지 타이머
+        _longPressTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromSeconds(3.5)
+            Interval = TimeSpan.FromMilliseconds(LongPressHoldMs)
         };
-        _confirmResetTimer.Tick += (_, _) =>
-        {
-            _confirmResetTimer.Stop();
-            _isAwaitingInlineConfirm = false;
-            if (!IsMouseOver && !_isPointerDown && !OverlayContextMenu.IsOpen)
-            {
-                SetExpandedMode(false);
-            }
-            ApplySettingsAndVisuals();
-        };
+        _longPressTimer.Tick += OnLongPressTimerTick;
 
         // 1초 주기로 위젯 비활성(10초 이상 미조작) 상태를 체크하여 (현재시간 - 출근시간, 휴게시간 제외) 표시를 갱신
         _idleTimer = new DispatcherTimer
@@ -93,7 +84,7 @@ public partial class MainWindow : Window
         _hoverCollapseTimer.Tick += (_, _) =>
         {
             _hoverCollapseTimer.Stop();
-            if (!_isPointerDown && !IsMouseOver && !OverlayContextMenu.IsOpen && !_isAwaitingInlineConfirm && !_isActionBusy)
+            if (!_isPointerDown && !IsMouseOver && !OverlayContextMenu.IsOpen && !_isLongPressArmed && !_isActionBusy)
             {
                 SetExpandedMode(false);
                 ApplySettingsAndVisuals();
@@ -106,7 +97,7 @@ public partial class MainWindow : Window
             _hoverCollapseTimer.Stop();
             _idleTimer.Stop();
             _pollTimer.Stop();
-            _confirmResetTimer.Stop();
+            _longPressTimer.Stop();
             _autoUpdateService.Dispose();
             _portalWindow?.ShutdownClose();
             _trayService.Dispose();
@@ -228,24 +219,37 @@ public partial class MainWindow : Window
         var activeBrush = new SolidColorBrush(activeStatusColor);
 
         // 1. Sun (근무중) / Moon (퇴근) Status Chip
-        StatusBadgeBorder.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(
-            isLightTheme ? (byte)22 : (byte)28,
-            activeStatusColor.R,
-            activeStatusColor.G,
-            activeStatusColor.B));
-        StatusBadgeBorder.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb(
-            isLightTheme ? (byte)70 : (byte)65,
-            activeStatusColor.R,
-            activeStatusColor.G,
-            activeStatusColor.B));
+        if (_isLongPressArmed && _isCursorInsideDuringLongPress)
+        {
+            // 꾹 누르기 완료 시 목표 상태 색상으로 배지를 강조 표시 (마우스가 위젯 밖으로 나가면 해제됨)
+            System.Windows.Media.Color readyColor = isWorking ? offWorkColor : workingColor;
+            StatusBadgeBorder.Background = new SolidColorBrush(readyColor);
+            StatusBadgeBorder.BorderBrush = new SolidColorBrush(readyColor);
+            StatusIconRect.OpacityMask = (System.Windows.Media.Brush)Resources[isWorking ? "BrushIconSun" : "BrushIconMoon"];
+            StatusIconRect.Fill = GetContrastingTextBrush(readyColor);
+        }
+        else
+        {
+            StatusBadgeBorder.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(
+                isLightTheme ? (byte)22 : (byte)28,
+                activeStatusColor.R,
+                activeStatusColor.G,
+                activeStatusColor.B));
+            StatusBadgeBorder.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb(
+                isLightTheme ? (byte)70 : (byte)65,
+                activeStatusColor.R,
+                activeStatusColor.G,
+                activeStatusColor.B));
 
-        StatusIconRect.OpacityMask = (System.Windows.Media.Brush)Resources[isWorking ? "BrushIconSun" : "BrushIconMoon"];
-        StatusIconRect.Fill = activeBrush;
+            StatusIconRect.OpacityMask = (System.Windows.Media.Brush)Resources[isWorking ? "BrushIconSun" : "BrushIconMoon"];
+            StatusIconRect.Fill = activeBrush;
+        }
 
         string? elapsedText = isWorking ? FormatWorkingElapsedTime(snapshot) : null;
+        string actionHint = isWorking ? "길게 눌러 퇴근" : "길게 눌러 출근";
         StatusBadgeBorder.ToolTip = isWorking && !string.IsNullOrWhiteSpace(elapsedText)
-            ? $"근무중 ({elapsedText}) · {snapshot.SubText}"
-            : $"{(isWorking ? "근무중" : "퇴근")} · {snapshot.SubText}";
+            ? $"근무중 ({elapsedText}) · {snapshot.SubText} ({actionHint})"
+            : $"{(isWorking ? "근무중" : "퇴근")} · {snapshot.SubText} ({actionHint})";
 
         // 2. 드래그 중에는 무조건 미니모드(텍스트 숨김), 평소에는 10초 이상 미조작 시에만 근무중인 시간 표시
         if (_hasMovedDuringDrag)
@@ -257,13 +261,6 @@ public partial class MainWindow : Window
         {
             SubStatusText.Text = "...";
             SubStatusText.Foreground = activeBrush;
-            SubStatusText.Visibility = Visibility.Visible;
-        }
-        else if (_isAwaitingInlineConfirm)
-        {
-            System.Windows.Media.Color confirmColor = isWorking ? offWorkColor : workingColor;
-            SubStatusText.Text = isWorking ? "퇴근?" : "출근?";
-            SubStatusText.Foreground = new SolidColorBrush(confirmColor);
             SubStatusText.Visibility = Visibility.Visible;
         }
         else if (snapshot.Status == WorkStatusKind.NeedsLogin)
@@ -282,23 +279,6 @@ public partial class MainWindow : Window
         {
             SubStatusText.Text = string.Empty;
             SubStatusText.Visibility = Visibility.Collapsed;
-        }
-
-        // 3. Shutdown / Power 아이콘 버튼 (출퇴근 액션)
-        if (_isAwaitingInlineConfirm)
-        {
-            System.Windows.Media.Color confirmColor = isWorking ? offWorkColor : workingColor;
-            PrimaryActionButton.Background = new SolidColorBrush(confirmColor);
-            PrimaryActionButton.Foreground = GetContrastingTextBrush(confirmColor);
-            PrimaryActionButton.ToolTip = isWorking ? "한 번 더 클릭: 퇴근 처리" : "한 번 더 클릭: 출근 처리";
-        }
-        else
-        {
-            PrimaryActionButton.Background = System.Windows.Media.Brushes.Transparent;
-            PrimaryActionButton.Foreground = new SolidColorBrush(iconFgColor);
-            PrimaryActionButton.ToolTip = snapshot.Status == WorkStatusKind.NeedsLogin
-                ? "로그인"
-                : (isWorking ? "퇴근하기" : "출근하기");
         }
 
         ImageSource dynamicIcon = _trayService.UpdateTrayAndWindowIcon(snapshot, activeStatusColor);
@@ -352,16 +332,42 @@ public partial class MainWindow : Window
             : System.Windows.Media.Brushes.White;
     }
 
+    private void OnLongPressTimerTick(object? sender, EventArgs e)
+    {
+        _longPressTimer.Stop();
+
+        if (!_isPointerDown || _hasMovedDuringDrag || !_isPressOnStatusIcon || _isActionBusy)
+            return;
+
+        if (!_snapService.IsCursorInsideWindow())
+            return;
+
+        _isLongPressArmed = true;
+        _isCursorInsideDuringLongPress = true;
+        ApplySettingsAndVisuals();
+    }
+
     private void OnOverlayMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         RecordInteraction();
         _hoverCollapseTimer.Stop();
 
-        if (e.OriginalSource is DependencyObject dep && IsInsideButton(dep))
+        var dep = e.OriginalSource as DependencyObject;
+        if (dep != null && IsInsideButton(dep))
             return;
 
         _isPointerDown = true;
         _hasMovedDuringDrag = false;
+        _isLongPressArmed = false;
+        _isCursorInsideDuringLongPress = true;
+        _isPressOnStatusIcon = dep == null || !IsInsideElement(dep, ActionPanel);
+
+        _longPressTimer.Stop();
+        if (_isPressOnStatusIcon && !_isActionBusy)
+        {
+            _longPressTimer.Start();
+        }
+
         _snapService.BeginDrag();
         ((UIElement)sender).CaptureMouse();
     }
@@ -373,8 +379,22 @@ public partial class MainWindow : Window
         if (!_isPointerDown)
             return;
 
+        // 롱프레스(꾹 누르기)가 활성화된 상태에서는 창을 드래그하지 않고,
+        // 커서가 위젯 내부에 있는지 여부만 실시간 추적 (위젯 밖으로 나가면 무시)
+        if (_isLongPressArmed)
+        {
+            bool inside = _snapService.IsCursorInsideWindow();
+            if (inside != _isCursorInsideDuringLongPress)
+            {
+                _isCursorInsideDuringLongPress = inside;
+                ApplySettingsAndVisuals();
+            }
+            return;
+        }
+
         if (!_hasMovedDuringDrag && _snapService.HasExceededDragThreshold())
         {
+            _longPressTimer.Stop();
             _hasMovedDuringDrag = true;
 
             // 드래그 시작 시 즉시 미니모드로 축소하여 경계 스냅 기준 크기를 고정
@@ -390,29 +410,52 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnOverlayMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    private async void OnOverlayMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         RecordInteraction();
+        _longPressTimer.Stop();
 
         if (!_isPointerDown)
             return;
 
+        bool wasDragging = _hasMovedDuringDrag;
+        bool wasLongPressArmed = _isLongPressArmed;
+        bool releasedInsideWidget = _snapService.IsCursorInsideWindow();
+
         _isPointerDown = false;
+        _hasMovedDuringDrag = false;
+        _isPressOnStatusIcon = false;
+        _isLongPressArmed = false;
+        _isCursorInsideDuringLongPress = false;
         _snapService.IsDraggingOverlay = false;
         ((UIElement)sender).ReleaseMouseCapture();
 
-        if (_hasMovedDuringDrag)
+        ApplySettingsAndVisuals();
+
+        if (wasDragging)
         {
-            _hasMovedDuringDrag = false;
             UpdateLayout();
             _snapService.EvaluateMagneticSnap(applyPosition: true);
+            return;
         }
-        else if (_isAwaitingInlineConfirm)
+
+        if (wasLongPressArmed)
         {
-            // "퇴근?" / "출근?" 확인 대기 중에 배지를 클릭해도 즉시 실행되도록 지원
-            _ = ExecuteClockActionAsync();
+            // 마우스가 위젯 바깥으로 나간 상태에서 press up 한 경우 무시
+            if (!releasedInsideWidget)
+            {
+                if (!IsMouseOver)
+                {
+                    SetExpandedMode(false);
+                }
+                return;
+            }
+
+            await HandleStatusIconLongPressReleaseAsync();
+            return;
         }
-        else if (IsMouseOver)
+
+        if (IsMouseOver)
         {
             SetExpandedMode(true);
         }
@@ -478,44 +521,47 @@ public partial class MainWindow : Window
         return false;
     }
 
-    private async void OnPrimaryActionClick(object sender, RoutedEventArgs e)
+    private static bool IsInsideElement(DependencyObject? source, DependencyObject target)
     {
-        RecordInteraction();
+        while (source != null)
+        {
+            if (ReferenceEquals(source, target))
+                return true;
+            source = VisualTreeHelper.GetParent(source);
+        }
+        return false;
+    }
 
+    private async Task HandleStatusIconLongPressReleaseAsync()
+    {
         if (_isActionBusy)
             return;
 
         var snapshot = _attendanceService.CurrentSnapshot;
 
-        if (snapshot.Status == WorkStatusKind.NeedsLogin)
+        // 근무중일 때 꾹 누르고 위젯 안에서 떼면 "퇴근 할래요?" Y/N 팝업 표시
+        if (snapshot.Status == WorkStatusKind.Working)
         {
-            OpenPortalWindow();
+            var confirmPopup = new ConfirmClockOutWindow(this);
+            bool confirmed = confirmPopup.ShowDialog() == true && confirmPopup.IsConfirmed;
+            if (!IsMouseOver && !_isPointerDown)
+            {
+                SetExpandedMode(false);
+            }
+            if (!confirmed)
+                return;
+
+            await ExecuteClockActionAsync(targetClockIn: false);
             return;
         }
 
-        if (!_isAwaitingInlineConfirm)
-        {
-            _isAwaitingInlineConfirm = true;
-            ApplySettingsAndVisuals();
-            _confirmResetTimer.Stop();
-            _confirmResetTimer.Start();
-            return;
-        }
-
-        await ExecuteClockActionAsync();
+        // 퇴근 상태에서 다시 꾹 누르고 위젯 안에서 떼면 팝업 없이 출근으로 바로 변경
+        await ExecuteClockActionAsync(targetClockIn: true);
     }
 
     private async void OnMenuClockActionClick(object sender, RoutedEventArgs e)
     {
         RecordInteraction();
-        await ExecuteClockActionAsync();
-    }
-
-    private async Task ExecuteClockActionAsync()
-    {
-        if (_isActionBusy)
-            return;
-
         var snapshot = _attendanceService.CurrentSnapshot;
         if (snapshot.Status == WorkStatusKind.NeedsLogin)
         {
@@ -523,29 +569,37 @@ public partial class MainWindow : Window
             return;
         }
 
-        bool targetClockIn = snapshot.Status != WorkStatusKind.Working;
+        if (snapshot.Status == WorkStatusKind.Working)
+        {
+            var confirmPopup = new ConfirmClockOutWindow(this);
+            bool confirmed = confirmPopup.ShowDialog() == true && confirmPopup.IsConfirmed;
+            if (!confirmed)
+                return;
 
-        _confirmResetTimer.Stop();
-        _isAwaitingInlineConfirm = false;
+            await ExecuteClockActionAsync(targetClockIn: false);
+        }
+        else
+        {
+            await ExecuteClockActionAsync(targetClockIn: true);
+        }
+    }
+
+    private async Task ExecuteClockActionAsync(bool targetClockIn)
+    {
+        if (_isActionBusy)
+            return;
+
         _isActionBusy = true;
-        PrimaryActionButton.IsEnabled = false;
         ApplySettingsAndVisuals();
 
         try
         {
-            var (success, _) = await _attendanceService.TriggerClockActionAsync(targetClockIn);
-            if (success)
-            {
-                _attendanceService.SetManualStatusOverride(targetClockIn ? WorkStatusKind.Working : WorkStatusKind.OffWork);
-            }
-            else
-            {
-                OpenPortalWindow();
-            }
+            // 위젯 상태를 즉시 목표 상태(출근/퇴근)로 반영하고 다우오피스 웹 액션도 함께 트리거
+            _attendanceService.SetManualStatusOverride(targetClockIn ? WorkStatusKind.Working : WorkStatusKind.OffWork);
+            await _attendanceService.TriggerClockActionAsync(targetClockIn);
         }
         finally
         {
-            PrimaryActionButton.IsEnabled = true;
             _isActionBusy = false;
             ApplySettingsAndVisuals();
         }
@@ -616,6 +670,7 @@ public partial class MainWindow : Window
     private async void OnRefreshClick(object sender, RoutedEventArgs e)
     {
         RecordInteraction();
+        _attendanceService.ClearManualStatusOverride();
         await _attendanceService.RefreshStatusAsync();
     }
 

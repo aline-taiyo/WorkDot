@@ -113,6 +113,8 @@ public sealed class DaouAttendanceService
     private WebView2? _webView;
     private bool _isInitialized;
     private DateTime _lastAutoLoginAttempt = DateTime.MinValue;
+    private WorkStatusKind? _manualStatusOverride;
+    private DateTime _manualOverrideDate;
 
     public AttendanceSnapshot CurrentSnapshot { get; private set; } = new(
         WorkStatusKind.OffWork,
@@ -619,8 +621,16 @@ public sealed class DaouAttendanceService
         }
     }
 
+    public void ClearManualStatusOverride()
+    {
+        _manualStatusOverride = null;
+    }
+
     public void SetManualStatusOverride(WorkStatusKind status)
     {
+        _manualStatusOverride = status;
+        _manualOverrideDate = DateTime.Today;
+
         string nowTime = DateTime.Now.ToString("HH:mm");
         if (status == WorkStatusKind.Working)
         {
@@ -631,7 +641,8 @@ public sealed class DaouAttendanceService
                 CurrentSnapshot.ClockInTimeText ?? nowTime,
                 null,
                 CurrentSnapshot.WorkedDurationText,
-                DateTime.Now));
+                DateTime.Now,
+                CurrentSnapshot.BreakWindows));
         }
         else
         {
@@ -642,7 +653,8 @@ public sealed class DaouAttendanceService
                 CurrentSnapshot.ClockInTimeText,
                 nowTime,
                 CurrentSnapshot.WorkedDurationText,
-                DateTime.Now));
+                DateTime.Now,
+                CurrentSnapshot.BreakWindows));
         }
     }
 
@@ -742,6 +754,15 @@ public sealed class DaouAttendanceService
             if ((breakWindows == null || breakWindows.Count == 0) && CurrentSnapshot.BreakWindows != null)
             {
                 breakWindows = CurrentSnapshot.BreakWindows.ToList();
+            }
+
+            if (_manualStatusOverride.HasValue && _manualOverrideDate == DateTime.Today)
+            {
+                state = _manualStatusOverride.Value == WorkStatusKind.Working ? "WORKING" : "OFF_WORK";
+                if (state == "WORKING" && string.IsNullOrWhiteSpace(clockIn))
+                {
+                    clockIn = CurrentSnapshot.ClockInTimeText;
+                }
             }
 
             if (state == "WORKING")

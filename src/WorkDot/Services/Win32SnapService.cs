@@ -159,6 +159,27 @@ public sealed class Win32SnapService : IDisposable
     }
 
     /// <summary>
+    /// 현재 물리 마우스 커서가 위젯 창 내부에 위치하는지 정확히 판정합니다.
+    /// 마우스 캡처 중에도 화면 물리 좌표(GetCursorPos, GetWindowRect)로 판정하므로 오차가 없습니다.
+    /// </summary>
+    public bool IsCursorInsideWindow()
+    {
+        if (_overlayHwnd == IntPtr.Zero)
+        {
+            _overlayHwnd = new WindowInteropHelper(_overlayWindow).Handle;
+        }
+
+        if (_overlayHwnd == IntPtr.Zero)
+            return _overlayWindow.IsMouseOver;
+
+        if (!GetCursorPos(out POINT pt) || !GetWindowRect(_overlayHwnd, out RECT rect))
+            return _overlayWindow.IsMouseOver;
+
+        return pt.X >= rect.Left && pt.X <= rect.Right &&
+               pt.Y >= rect.Top && pt.Y <= rect.Bottom;
+    }
+
+    /// <summary>
     /// 물리 커서 좌표(GetCursorPos)를 기반으로 드래그 중 위치를 계산하고 히스테리시스 스냅을 단 1회만 적용합니다.
     /// 창 자신의 이동에 영향을 받지 않으므로 경계 근처에서 마우스를 움직여도 떨림이 발생하지 않습니다.
     /// </summary>
