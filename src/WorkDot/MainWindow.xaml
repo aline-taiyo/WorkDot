@@ -1,0 +1,266 @@
+<Window x:Class="WorkDot.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="WorkDot"
+        SizeToContent="WidthAndHeight"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize">
+
+    <Window.Resources>
+        <!-- 숨쉬는 상태 LED 펄스 애니메이션 -->
+        <Storyboard x:Key="PulseStoryboard" RepeatBehavior="Forever">
+            <DoubleAnimation Storyboard.TargetName="PulseRingScale"
+                             Storyboard.TargetProperty="ScaleX"
+                             From="1.0" To="2.2" Duration="0:0:1.8">
+                <DoubleAnimation.EasingFunction>
+                    <QuadraticEase EasingMode="EaseOut"/>
+                </DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+            <DoubleAnimation Storyboard.TargetName="PulseRingScale"
+                             Storyboard.TargetProperty="ScaleY"
+                             From="1.0" To="2.2" Duration="0:0:1.8">
+                <DoubleAnimation.EasingFunction>
+                    <QuadraticEase EasingMode="EaseOut"/>
+                </DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+            <DoubleAnimation Storyboard.TargetName="PulseRing"
+                             Storyboard.TargetProperty="Opacity"
+                             From="0.75" To="0.0" Duration="0:0:1.8"/>
+        </Storyboard>
+
+        <!-- 세련된 액션 버튼 스타일 -->
+        <Style x:Key="PillActionButtonStyle" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="12,5"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="BtnBorder"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="13"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="BtnBorder" Property="Opacity" Value="0.88"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="BtnBorder" Property="Opacity" Value="0.72"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 아이콘 보조 버튼 스타일 -->
+        <Style x:Key="IconGhostButtonStyle" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Background" Value="#1E293B"/>
+            <Setter Property="Foreground" Value="#CBD5E1"/>
+            <Setter Property="Width" Value="26"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="IconBorder"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="13">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="IconBorder" Property="Opacity" Value="0.82"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <!-- 외곽 그림자 여백 확보용 컨테이너 -->
+    <Grid x:Name="RootContainer"
+          Margin="16"
+          MouseLeftButtonDown="OnOverlayMouseLeftButtonDown"
+          MouseMove="OnOverlayMouseMove"
+          MouseLeftButtonUp="OnOverlayMouseLeftButtonUp"
+          MouseWheel="OnOverlayMouseWheel"
+          MouseEnter="OnOverlayMouseEnter"
+          MouseLeave="OnOverlayMouseLeave">
+
+        <Grid.ContextMenu>
+            <ContextMenu Opened="OnContextMenuOpened">
+                <MenuItem x:Name="MenuVersionHeader" Header="✨ WorkDot v1.1.0" IsEnabled="False" FontWeight="Bold"/>
+                <Separator/>
+                <MenuItem Header="⚙️ 환경설정 (테마·색상·투명도·크기)..." Click="OnOpenSettingsClick" FontWeight="SemiBold"/>
+                <MenuItem Header="🌐 다우오피스 근태 창 열기 (로그인/상세)" Click="OnOpenPortalClick"/>
+                <MenuItem Header="🔄 지금 상태 새로고침" Click="OnRefreshClick"/>
+                <Separator/>
+                <MenuItem x:Name="MenuAlwaysOnTop" Header="📌 항상 위에 표시 (Topmost)" IsCheckable="True" Click="OnMenuAlwaysOnTopClick"/>
+                <MenuItem x:Name="MenuRunAtStartup" Header="🚀 Windows 시작 시 자동 실행" IsCheckable="True" Click="OnMenuRunAtStartupClick"/>
+                <MenuItem Header="📐 위젯 크기 빠른 변경">
+                    <MenuItem Header="작게 (80%)" Tag="0.8" Click="OnMenuQuickScaleClick"/>
+                    <MenuItem Header="기본 (100%)" Tag="1.0" Click="OnMenuQuickScaleClick"/>
+                    <MenuItem Header="크게 (120%)" Tag="1.2" Click="OnMenuQuickScaleClick"/>
+                    <MenuItem Header="아주 크게 (140%)" Tag="1.4" Click="OnMenuQuickScaleClick"/>
+                </MenuItem>
+                <Separator/>
+                <MenuItem Header="🟢 [빠른 전환] 근무중 상태로 표시" Click="OnForceWorkingClick"/>
+                <MenuItem Header="🔴 [빠른 전환] 퇴근 상태로 표시" Click="OnForceOffWorkClick"/>
+                <Separator/>
+                <MenuItem Header="🧲 작업 표시줄 위로 스냅 이동" Click="OnSnapToTaskbarClick"/>
+                <MenuItem Header="✨ 컴팩트/미니 점(Dot) 모드 전환 (더블클릭)" Click="OnToggleMiniModeClick"/>
+                <Separator/>
+                <MenuItem Header="❌ WorkDot 종료" Click="OnExitClick"/>
+            </ContextMenu>
+        </Grid.ContextMenu>
+
+        <!-- 숨겨진 백그라운드 WebView2 (그룹웨어 세션 유지 및 자동 파싱용) -->
+        <Border Width="1" Height="1" Opacity="0.01" IsHitTestVisible="False" HorizontalAlignment="Left" VerticalAlignment="Top">
+            <wv2:WebView2 x:Name="HiddenWebView" Width="1024" Height="768"/>
+        </Border>
+
+        <!-- 메인 캡슐(Pill) 본체 -->
+        <Border x:Name="CapsuleBorder"
+                CornerRadius="24"
+                Background="#EE0F172A"
+                BorderBrush="#6610B981"
+                BorderThickness="1.5"
+                Padding="12,8">
+            <Border.LayoutTransform>
+                <ScaleTransform x:Name="CapsuleScaleTransform" ScaleX="1.0" ScaleY="1.0"/>
+            </Border.LayoutTransform>
+            <Border.Effect>
+                <DropShadowEffect x:Name="CapsuleGlow"
+                                  Color="#10B981"
+                                  BlurRadius="18"
+                                  ShadowDepth="0"
+                                  Opacity="0.55"/>
+            </Border.Effect>
+
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <!-- 1. 네온 상태 인디케이터 (초록/빨강 발광 Dot) -->
+                <Grid Width="24" Height="24" Margin="0,0,8,0" VerticalAlignment="Center"
+                      ToolTip="더블클릭: 미니 점(Dot) 모드 전환 | Ctrl+마우스휠: 크기 조절">
+                    <!-- 바깥 펄스 링 -->
+                    <Ellipse x:Name="PulseRing"
+                             Width="14" Height="14"
+                             Fill="#10B981"
+                             Opacity="0.6"
+                             RenderTransformOrigin="0.5,0.5">
+                        <Ellipse.RenderTransform>
+                            <ScaleTransform x:Name="PulseRingScale" ScaleX="1" ScaleY="1"/>
+                        </Ellipse.RenderTransform>
+                    </Ellipse>
+
+                    <!-- 내부 발광 코어 점 -->
+                    <Ellipse x:Name="StatusCoreDot"
+                             Width="14" Height="14"
+                             Fill="#10B981"
+                             Stroke="#FFFFFF"
+                             StrokeThickness="1.5">
+                        <Ellipse.Effect>
+                            <DropShadowEffect x:Name="DotGlow"
+                                              Color="#10B981"
+                                              BlurRadius="12"
+                                              ShadowDepth="0"
+                                              Opacity="0.95"/>
+                        </Ellipse.Effect>
+                    </Ellipse>
+                </Grid>
+
+                <!-- 2. 상태 텍스트 & 스냅/시간/버전 서브텍스트 영역 -->
+                <StackPanel x:Name="InfoPanel" VerticalAlignment="Center" Margin="0,0,12,0">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock x:Name="StatusTitleText"
+                                   Text="근무중"
+                                   Foreground="#10B981"
+                                   FontSize="14.5"
+                                   FontWeight="ExtraBold"
+                                   VerticalAlignment="Center"/>
+
+                        <!-- 스냅 상태 뱃지 -->
+                        <Border x:Name="SnapBadge"
+                                Background="#1E293B"
+                                BorderBrush="#334155"
+                                BorderThickness="1"
+                                CornerRadius="7"
+                                Padding="5,1"
+                                Margin="7,0,0,0"
+                                VerticalAlignment="Center"
+                                Visibility="Collapsed">
+                            <TextBlock x:Name="SnapBadgeText"
+                                       Text="🧲 스냅됨"
+                                       Foreground="#94A3B8"
+                                       FontSize="10"
+                                       MaxWidth="110"
+                                       TextTrimming="CharacterEllipsis"/>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,1,0,0">
+                        <TextBlock x:Name="SubStatusText"
+                                   Text="그룹웨어 동기화 중..."
+                                   Foreground="#94A3B8"
+                                   FontSize="11"/>
+                        <TextBlock x:Name="InlineVersionText"
+                                   Text=" · v1.1.0"
+                                   Foreground="#64748B"
+                                   FontSize="10"
+                                   VerticalAlignment="Bottom"
+                                   Margin="2,0,0,0"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- 3. 원클릭 직관적 출근/퇴근 액션 & 설정 버튼 영역 -->
+                <StackPanel x:Name="ActionPanel" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- 주 액션 버튼: 퇴근 상태일 땐 [출근하기], 근무중일 땐 [퇴근하기] -->
+                    <Button x:Name="PrimaryActionButton"
+                            Style="{StaticResource PillActionButtonStyle}"
+                            Content="출근하기"
+                            Background="#10B981"
+                            Foreground="#042F2E"
+                            Click="OnPrimaryActionClick"
+                            Margin="0,0,6,0"/>
+
+                    <!-- 다우오피스 창 열기 버튼 -->
+                    <Button x:Name="PortalIconButton"
+                            Style="{StaticResource IconGhostButtonStyle}"
+                            Content="🌐"
+                            FontSize="12"
+                            ToolTip="다우오피스 근태 페이지 열기 (로그인/상세)"
+                            Click="OnOpenPortalClick"
+                            Margin="0,0,4,0"/>
+
+                    <!-- 새로고침 버튼 -->
+                    <Button x:Name="RefreshIconButton"
+                            Style="{StaticResource IconGhostButtonStyle}"
+                            Content="↻"
+                            FontSize="13"
+                            ToolTip="근태 상태 새로고침"
+                            Click="OnRefreshClick"
+                            Margin="0,0,4,0"/>
+
+                    <!-- 환경설정 버튼 -->
+                    <Button x:Name="SettingsIconButton"
+                            Style="{StaticResource IconGhostButtonStyle}"
+                            Content="⚙"
+                            FontSize="13"
+                            ToolTip="WorkDot 환경설정 (테마·색상·투명도·크기·자동실행)"
+                            Click="OnOpenSettingsClick"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

@@ -1,0 +1,42 @@
+<Window x:Class="WorkDot.AttendanceWebWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="WorkDot · 다우오피스 근태관리"
+        Width="1060" Height="760"
+        WindowStartupLocation="CenterScreen"
+        Background="#0F172A">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="46"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 상단 툴바 -->
+        <Border Grid.Row="0" Background="#1E293B" BorderBrush="#334155" BorderThickness="0,0,0,1" Padding="14,0">
+            <DockPanel LastChildFill="True">
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" VerticalAlignment="Center">
+                    <Ellipse Width="10" Height="10" Fill="#10B981" Margin="0,0,8,0"/>
+                    <TextBlock Text="다우오피스 근태 현황 (로그인 시 자동 동기화)"
+                               Foreground="#F8FAFC" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+                    <Button Content="근태 페이지로 이동" Click="OnGoHomeClick"
+                            Background="#334155" Foreground="#E2E8F0" BorderThickness="0"
+                            Padding="10,5" Margin="0,0,8,0" Cursor="Hand"/>
+                    <Button Content="상태 동기화 및 닫기" Click="OnSyncAndCloseClick"
+                            Background="#10B981" Foreground="#062E22" FontWeight="Bold" BorderThickness="0"
+                            Padding="12,5" Cursor="Hand"/>
+                </StackPanel>
+
+                <TextBlock x:Name="UrlText" Text="https://alinestudio.daouoffice.com/ehr/app/attend/my-attendance-status"
+                           Foreground="#94A3B8" FontSize="11.5" VerticalAlignment="Center" Margin="16,0"
+                           TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+        </Border>
+
+        <!-- WebView2 -->
+        <wv2:WebView2 x:Name="PortalWebView" Grid.Row="1" DefaultBackgroundColor="#0F172A"/>
+    </Grid>
+</Window>
