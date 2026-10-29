@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="환경설정"
         Icon="pack://application:,,,/WorkDot;component/Assets/Icons/workdot.ico"
-        Width="440" Height="772"
+        Width="440" Height="656"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -21,30 +21,6 @@
             <Setter Property="CornerRadius" Value="8"/>
             <Setter Property="Padding" Value="14,12"/>
             <Setter Property="Margin" Value="0,0,0,10"/>
-        </Style>
-
-        <Style x:Key="ColorChipBtnStyle" TargetType="Button">
-            <Setter Property="Width" Value="22"/>
-            <Setter Property="Height" Value="22"/>
-            <Setter Property="Margin" Value="0,0,5,0"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="ChipBd"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="#3F3F46"
-                                BorderThickness="1"
-                                CornerRadius="6"/>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ChipBd" Property="BorderBrush" Value="#FAFAFA"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
         </Style>
 
         <Style x:Key="ScalePillBtnStyle" TargetType="Button">
@@ -134,7 +110,7 @@
                             </Border>
                         </StackPanel>
 
-                        <TextBlock Text="위젯의 테마, 상태 색상 및 업데이트 옵션을 설정합니다."
+                        <TextBlock Text="위젯의 테마, 투명도·크기 및 업데이트 옵션을 설정합니다."
                                    FontFamily="{StaticResource SansFont}"
                                    FontSize="12"
                                    Foreground="#71717A"
@@ -185,75 +161,7 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- 2. Status Colors -->
-                    <Border Style="{StaticResource ShadcnCardStyle}">
-                        <StackPanel>
-                            <TextBlock Text="상태 인디케이터 색상"
-                                       FontFamily="{StaticResource SansFont}"
-                                       FontSize="13"
-                                       FontWeight="SemiBold"
-                                       Foreground="#FAFAFA"
-                                       Margin="0,0,0,10"/>
-
-                            <!-- Working Color -->
-                            <Grid Margin="0,0,0,8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="86"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="96"/>
-                                </Grid.ColumnDefinitions>
-
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Ellipse x:Name="WorkingColorPreview" Width="9" Height="9" Fill="#10B981" Margin="0,0,7,0"/>
-                                    <TextBlock Text="근무중" FontFamily="{StaticResource SansFont}" Foreground="#E4E4E7" FontSize="12.5"/>
-                                </StackPanel>
-
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Button Style="{StaticResource ColorChipBtnStyle}" Background="#10B981" Tag="#10B981" Click="OnWorkingSwatchClick"/>
-                                    <Button Style="{StaticResource ColorChipBtnStyle}" Background="#22C55E" Tag="#22C55E" Click="OnWorkingSwatchClick"/>
-                                    <Button Style="{StaticResource ColorChipBtnStyle}" Background="#06B6D4" Tag="#06B6D4" Click="OnWorkingSwatchClick"/>
-                                    <Button Style="{StaticResource ColorChipBtnStyle}" Background="#3B82F6" Tag="#3B82F6" Click="OnWorkingSwatchClick"/>
-                                    <Button Style="{StaticResource ColorChipBtnStyle}" Background="#8B5CF6" Tag="#8B5CF6" Click="OnWorkingSwatchClick"/>
-                                </StackPanel>
-
-                                <TextBox x:Name="WorkingHexBox"
-                                         Grid.Column="2"
-                                         Style="{StaticResource ModernHexTextBoxStyle}"
-                                         Text="#10B981"
-                                         TextChanged="OnWorkingHexChanged"/>
-                            </Grid>
-
-                            <!-- Off-Work Color -->
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="86"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="96"/>
-                                </Grid.ColumnDefinitions>
-
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Ellipse x:Name="OffWorkColorPreview" Width="9" Height="9" Fill="#EF4444" Margin="0,0,7,0"/>
-                                    <TextBlock Text="퇴근" FontFamily="{StaticResource SansFont}" Foreground="#E4E4E7" FontSize="12.5"/>
-                                </StackPanel>
-
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Button Style="{StaticResource ColorChipBtnStyle}" Background="#EF4444" Tag="#EF4444" Click="OnOffWorkSwatchClick"/>
-                                    <Button Style="{StaticResource ColorChipBtnStyle}" Background="#F97316" Tag="#F97316" Click="OnOffWorkSwatchClick"/>
-                                    <Button Style="{StaticResource ColorChipBtnStyle}" Background="#F59E0B" Tag="#F59E0B" Click="OnOffWorkSwatchClick"/>
-                                    <Button Style="{StaticResource ColorChipBtnStyle}" Background="#EC4899" Tag="#EC4899" Click="OnOffWorkSwatchClick"/>
-                                    <Button Style="{StaticResource ColorChipBtnStyle}" Background="#71717A" Tag="#71717A" Click="OnOffWorkSwatchClick"/>
-                                </StackPanel>
-
-                                <TextBox x:Name="OffWorkHexBox"
-                                         Grid.Column="2"
-                                         Style="{StaticResource ModernHexTextBoxStyle}"
-                                         Text="#EF4444"
-                                         TextChanged="OnOffWorkHexChanged"/>
-                            </Grid>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- 3. Opacity & Scale -->
+                    <!-- 2. Opacity & Scale -->
                     <Border Style="{StaticResource ShadcnCardStyle}">
                         <StackPanel>
                             <!-- Opacity -->

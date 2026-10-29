@@ -13,6 +13,7 @@ public partial class MainWindow : Window
 {
     private const double IdleSecondsBeforeShowingElapsed = 10.0;
     private const double LongPressHoldMs = 450.0;
+    private const double TargetWorkHoursMinutes = 480.0; // 8시간 = 480분 기준 게이지
 
     private readonly AppSettingsService _settingsService;
     private readonly AutoUpdateService _autoUpdateService;
@@ -35,6 +36,7 @@ public partial class MainWindow : Window
     private bool _isActionBusy;
     private DateTime _lastInteractionUtc = DateTime.UtcNow;
     private bool _isIdleElapsedVisible;
+    private int _lastRenderedWorkedMinute = -1;
 
     public MainWindow()
     {
@@ -153,10 +155,14 @@ public partial class MainWindow : Window
 
     private void OnIdleTimerTick(object? sender, EventArgs e)
     {
+        var snapshot = _attendanceService.CurrentSnapshot;
+        int currentWorkedMin = (int)(snapshot.GetWorkingElapsedSpanExcludingBreaks(DateTime.Now)?.TotalMinutes ?? -1);
+        bool minuteChanged = snapshot.Status == WorkStatusKind.Working && currentWorkedMin != _lastRenderedWorkedMinute;
+
         if (_isPointerDown || IsMouseOver || OverlayContextMenu.IsOpen)
         {
             _lastInteractionUtc = DateTime.UtcNow;
-            if (_isIdleElapsedVisible)
+            if (_isIdleElapsedVisible || minuteChanged)
             {
                 _isIdleElapsedVisible = false;
                 ApplySettingsAndVisuals();
@@ -166,9 +172,9 @@ public partial class MainWindow : Window
 
         double idleSeconds = (DateTime.UtcNow - _lastInteractionUtc).TotalSeconds;
         bool shouldShowElapsed = idleSeconds >= IdleSecondsBeforeShowingElapsed &&
-                                 _attendanceService.CurrentSnapshot.Status == WorkStatusKind.Working;
+                                 snapshot.Status == WorkStatusKind.Working;
 
-        if (shouldShowElapsed || _isIdleElapsedVisible)
+        if (shouldShowElapsed || _isIdleElapsedVisible || minuteChanged)
         {
             _isIdleElapsedVisible = shouldShowElapsed;
             ApplySettingsAndVisuals();
@@ -211,44 +217,53 @@ public partial class MainWindow : Window
 
         ApplyGhostButtonTheme(iconFgColor);
 
-        System.Windows.Media.Color workingColor = AppSettingsService.ParseColorOrDefault(settings.WorkingColorHex, "#10B981");
-        System.Windows.Media.Color offWorkColor = AppSettingsService.ParseColorOrDefault(settings.OffWorkColorHex, "#EF4444");
+        System.Windows.Media.Color greenGaugeColor = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#10B981");
+        System.Windows.Media.Color redFullColor = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#EF4444");
+        System.Windows.Media.Color offWorkSlateColor = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#71717A");
 
         bool isWorking = snapshot.Status == WorkStatusKind.Working;
-        System.Windows.Media.Color activeStatusColor = isWorking ? workingColor : offWorkColor;
+        TimeSpan? workedSpan = isWorking ? snapshot.GetWorkingElapsedSpanExcludingBreaks(DateTime.Now) : null;
+        double workedMinutes = workedSpan?.TotalMinutes ?? 0.0;
+        _lastRenderedWorkedMinute = isWorking ? (int)workedMinutes : -1;
+
+        double gaugeRatio = isWorking ? Math.Clamp(workedMinutes / TargetWorkHoursMinutes, 0.0, 1.0) : 0.0;
+        bool isFull8Hours = isWorking && workedMinutes >= TargetWorkHoursMinutes;
+
+        // 근무중 8시간 미만: 초록(#10B981), 8시간 달성(꽉 참): 빨강(#EF4444), 퇴근: 슬레이트(#71717A)
+        System.Windows.Media.Color activeStatusColor = isWorking
+            ? (isFull8Hours ? redFullColor : greenGaugeColor)
+            : offWorkSlateColor;
         var activeBrush = new SolidColorBrush(activeStatusColor);
 
-        // 1. Sun (근무중) / Moon (퇴근) Status Chip
-        if (_isLongPressArmed && _isCursorInsideDuringLongPress)
+        bool isArmedHighlight = _isLongPressArmed && _isCursorInsideDuringLongPress;
+        if (isArmedHighlight)
         {
-            // 꾹 누르기 완료 시 목표 상태 색상으로 배지를 강조 표시 (마우스가 위젯 밖으로 나가면 해제됨)
-            System.Windows.Media.Color readyColor = isWorking ? offWorkColor : workingColor;
+            // 꾹 누르기 완료 시 목표 상태 색상으로 배지를 강조 표시 (근무중->퇴근 빨강, 퇴근->출근 초록)
+            System.Windows.Media.Color readyColor = isWorking ? redFullColor : greenGaugeColor;
             StatusBadgeBorder.Background = new SolidColorBrush(readyColor);
             StatusBadgeBorder.BorderBrush = new SolidColorBrush(readyColor);
-            StatusIconRect.OpacityMask = (System.Windows.Media.Brush)Resources[isWorking ? "BrushIconSun" : "BrushIconMoon"];
-            StatusIconRect.Fill = GetContrastingTextBrush(readyColor);
         }
         else
         {
             StatusBadgeBorder.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(
-                isLightTheme ? (byte)22 : (byte)28,
+                isLightTheme ? (byte)20 : (byte)24,
                 activeStatusColor.R,
                 activeStatusColor.G,
                 activeStatusColor.B));
             StatusBadgeBorder.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb(
-                isLightTheme ? (byte)70 : (byte)65,
+                isLightTheme ? (byte)65 : (byte)58,
                 activeStatusColor.R,
                 activeStatusColor.G,
                 activeStatusColor.B));
-
-            StatusIconRect.OpacityMask = (System.Windows.Media.Brush)Resources[isWorking ? "BrushIconSun" : "BrushIconMoon"];
-            StatusIconRect.Fill = activeBrush;
         }
 
+        UpdateClockGaugeVisuals(isWorking, gaugeRatio, isFull8Hours, isLightTheme, isArmedHighlight);
+
         string? elapsedText = isWorking ? FormatWorkingElapsedTime(snapshot) : null;
+        int pct = (int)Math.Round(gaugeRatio * 100);
         string actionHint = isWorking ? "길게 눌러 퇴근" : "길게 눌러 출근";
         StatusBadgeBorder.ToolTip = isWorking && !string.IsNullOrWhiteSpace(elapsedText)
-            ? $"근무중 ({elapsedText}) · {snapshot.SubText} ({actionHint})"
+            ? $"근무중 ({elapsedText} / 08:00 · {pct}%) · {snapshot.SubText} ({actionHint})"
             : $"{(isWorking ? "근무중" : "퇴근")} · {snapshot.SubText} ({actionHint})";
 
         // 2. 드래그 중에는 무조건 미니모드(텍스트 숨김), 평소에는 10초 이상 미조작 시에만 근무중인 시간 표시
@@ -266,7 +281,7 @@ public partial class MainWindow : Window
         else if (snapshot.Status == WorkStatusKind.NeedsLogin)
         {
             SubStatusText.Text = "로그인";
-            SubStatusText.Foreground = activeBrush;
+            SubStatusText.Foreground = new SolidColorBrush(redFullColor);
             SubStatusText.Visibility = Visibility.Visible;
         }
         else if (_isIdleElapsedVisible && isWorking && !string.IsNullOrWhiteSpace(elapsedText))
@@ -289,6 +304,136 @@ public partial class MainWindow : Window
             UpdateLayout();
             _snapService.AlignToSnappedEdges();
         }
+    }
+
+    /// <summary>
+    /// 앱 아이콘 시계 디자인을 기반으로 8시간 기준 초록 게이지(0~100%) 및 8시간 달성 시 빨간 게이지를 렌더링합니다.
+    /// </summary>
+    private void UpdateClockGaugeVisuals(
+        bool isWorking,
+        double gaugeRatio,
+        bool isFull8Hours,
+        bool isLightTheme,
+        bool isArmedHighlight)
+    {
+        const double cx = 9.0;
+        const double cy = 9.0;
+        const double r = 7.2;
+
+        if (isArmedHighlight)
+        {
+            var whiteBrush = System.Windows.Media.Brushes.White;
+            ClockTrackRing.Stroke = new SolidColorBrush(System.Windows.Media.Color.FromArgb(95, 255, 255, 255));
+            ClockFullRing.Visibility = Visibility.Visible;
+            ClockFullRing.Stroke = whiteBrush;
+            ClockGaugeArcPath.Visibility = Visibility.Collapsed;
+            ClockHandsPath.Stroke = whiteBrush;
+            ClockCenterPivot.Fill = whiteBrush;
+
+            System.Windows.Media.Color readyBg = isWorking
+                ? (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#EF4444")
+                : (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#10B981");
+            ClockTipCutout.Fill = new SolidColorBrush(readyBg);
+            ClockTipDot.Fill = whiteBrush;
+            PositionClockTipOrb(cx, cy, r, -42.0);
+            return;
+        }
+
+        System.Windows.Media.Color cutoutColor = isLightTheme
+            ? (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#FFFFFF")
+            : (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#09090B");
+        ClockTipCutout.Fill = new SolidColorBrush(cutoutColor);
+
+        if (!isWorking)
+        {
+            // 퇴근 상태: 비어 있는 트랙 링 + 슬레이트 바늘 및 도트
+            ClockTrackRing.Stroke = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
+                isLightTheme ? "#D4D4D8" : "#3F3F46"));
+            ClockFullRing.Visibility = Visibility.Collapsed;
+            ClockGaugeArcPath.Visibility = Visibility.Collapsed;
+
+            var mutedBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
+                isLightTheme ? "#71717A" : "#A1A1AA"));
+            ClockHandsPath.Stroke = mutedBrush;
+            ClockCenterPivot.Fill = mutedBrush;
+            ClockTipDot.Fill = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
+                isLightTheme ? "#A1A1AA" : "#52525B"));
+            PositionClockTipOrb(cx, cy, r, -42.0);
+            return;
+        }
+
+        // 근무중 상태: 8시간 미만 초록 게이지(#10B981), 8시간 이상(꽉 참) 빨간 게이지(#EF4444)
+        ClockTrackRing.Stroke = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
+            isLightTheme ? "#E4E4E7" : "#27272A"));
+
+        var handsBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
+            isLightTheme ? "#18181B" : "#FAFAFA"));
+        ClockHandsPath.Stroke = handsBrush;
+        ClockCenterPivot.Fill = handsBrush;
+
+        if (isFull8Hours || gaugeRatio >= 0.995)
+        {
+            // 8시간 달성 시 빨간색 꽉 찬 게이지
+            var redBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#EF4444"));
+            var lightRedBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F87171"));
+            ClockFullRing.Stroke = redBrush;
+            ClockFullRing.Visibility = Visibility.Visible;
+            ClockGaugeArcPath.Visibility = Visibility.Collapsed;
+            ClockTipDot.Fill = lightRedBrush;
+            PositionClockTipOrb(cx, cy, r, -42.0);
+        }
+        else
+        {
+            // 0 ~ 8시간 진행 중 초록색 게이지 (12시 방향 -90도에서 시계방향으로 채움)
+            var greenBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#10B981"));
+            var brightGreenBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#34D399"));
+            ClockFullRing.Visibility = Visibility.Collapsed;
+            ClockGaugeArcPath.Stroke = greenBrush;
+            ClockGaugeArcPath.Visibility = Visibility.Visible;
+
+            double sweepDeg = Math.Clamp(gaugeRatio * 360.0, 22.0, 355.0);
+            double startDeg = -90.0;
+            double endDeg = startDeg + sweepDeg;
+
+            double startRad = startDeg * Math.PI / 180.0;
+            double endRad = endDeg * Math.PI / 180.0;
+
+            System.Windows.Point startPt = new(cx + Math.Cos(startRad) * r, cy + Math.Sin(startRad) * r);
+            System.Windows.Point endPt = new(cx + Math.Cos(endRad) * r, cy + Math.Sin(endRad) * r);
+
+            var figure = new PathFigure
+            {
+                StartPoint = startPt,
+                IsClosed = false,
+                IsFilled = false
+            };
+            figure.Segments.Add(new ArcSegment(
+                endPt,
+                new System.Windows.Size(r, r),
+                0.0,
+                isLargeArc: sweepDeg > 180.0,
+                SweepDirection.Clockwise,
+                isStroked: true));
+
+            var geom = new PathGeometry();
+            geom.Figures.Add(figure);
+            ClockGaugeArcPath.Data = geom;
+
+            ClockTipDot.Fill = brightGreenBrush;
+            PositionClockTipOrb(cx, cy, r, endDeg);
+        }
+    }
+
+    private void PositionClockTipOrb(double cx, double cy, double r, double angleDeg)
+    {
+        double rad = angleDeg * Math.PI / 180.0;
+        double tipX = cx + Math.Cos(rad) * r;
+        double tipY = cy + Math.Sin(rad) * r;
+
+        Canvas.SetLeft(ClockTipCutout, tipX - ClockTipCutout.Width / 2.0);
+        Canvas.SetTop(ClockTipCutout, tipY - ClockTipCutout.Height / 2.0);
+        Canvas.SetLeft(ClockTipDot, tipX - ClockTipDot.Width / 2.0);
+        Canvas.SetTop(ClockTipDot, tipY - ClockTipDot.Height / 2.0);
     }
 
     private void ToggleOverlayVisibility()

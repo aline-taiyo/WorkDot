@@ -34,9 +34,9 @@ public sealed record AttendanceSnapshot(
 
     /// <summary>
     /// 다우오피스에서 수집된 출근 시각 및 휴게시간(fixedBreakTimeList / 기본 12:00~13:00)을 바탕으로
-    /// 휴게시간을 제외한 실근무 경과 시간(HH:mm)을 계산합니다.
+    /// 휴게시간을 제외한 실근무 경과 시간(TimeSpan)을 계산합니다.
     /// </summary>
-    public string? GetWorkingElapsedExcludingBreaks(DateTime now)
+    public TimeSpan? GetWorkingElapsedSpanExcludingBreaks(DateTime now)
     {
         if (!string.IsNullOrWhiteSpace(ClockInTimeText) &&
             TimeSpan.TryParse(ClockInTimeText.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan clockInTod))
@@ -76,8 +76,29 @@ public sealed record AttendanceSnapshot(
                 totalSpan = TimeSpan.Zero;
             }
 
-            int hours = (int)totalSpan.TotalHours;
-            int minutes = totalSpan.Minutes;
+            return totalSpan;
+        }
+
+        if (!string.IsNullOrWhiteSpace(WorkedDurationText) &&
+            TimeSpan.TryParse(WorkedDurationText.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan parsedDur))
+        {
+            return parsedDur;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 다우오피스에서 수집된 출근 시각 및 휴게시간(fixedBreakTimeList / 기본 12:00~13:00)을 바탕으로
+    /// 휴게시간을 제외한 실근무 경과 시간(HH:mm)을 계산합니다.
+    /// </summary>
+    public string? GetWorkingElapsedExcludingBreaks(DateTime now)
+    {
+        TimeSpan? span = GetWorkingElapsedSpanExcludingBreaks(now);
+        if (span.HasValue)
+        {
+            int hours = (int)span.Value.TotalHours;
+            int minutes = span.Value.Minutes;
             return $"{hours:D2}:{minutes:D2}";
         }
 

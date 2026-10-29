@@ -106,12 +106,6 @@ public partial class SettingsWindow : Window
             ThemeDarkRadio.IsChecked = s.ThemeMode == WidgetThemeMode.Dark;
             ThemeLightRadio.IsChecked = s.ThemeMode == WidgetThemeMode.Light;
 
-            WorkingHexBox.Text = s.WorkingColorHex;
-            UpdatePreviewColor(WorkingColorPreview, s.WorkingColorHex, "#10B981");
-
-            OffWorkHexBox.Text = s.OffWorkColorHex;
-            UpdatePreviewColor(OffWorkColorPreview, s.OffWorkColorHex, "#EF4444");
-
             OpacitySlider.Value = s.WidgetOpacity;
             OpacityValueText.Text = $"{(int)Math.Round(s.WidgetOpacity * 100)}%";
 
@@ -128,12 +122,6 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private static void UpdatePreviewColor(System.Windows.Shapes.Ellipse preview, string hex, string fallback)
-    {
-        var c = AppSettingsService.ParseColorOrDefault(hex, fallback);
-        preview.Fill = new SolidColorBrush(c);
-    }
-
     private void OnThemeRadioChanged(object sender, RoutedEventArgs e)
     {
         if (_isLoadingUi || _settingsService == null)
@@ -146,50 +134,6 @@ public partial class SettingsWindow : Window
             mode = WidgetThemeMode.Light;
 
         _settingsService.SaveAndApply(s => s.ThemeMode = mode);
-    }
-
-    private void OnWorkingSwatchClick(object sender, RoutedEventArgs e)
-    {
-        if (sender is System.Windows.Controls.Button btn && btn.Tag is string hex)
-        {
-            WorkingHexBox.Text = hex;
-        }
-    }
-
-    private void OnOffWorkSwatchClick(object sender, RoutedEventArgs e)
-    {
-        if (sender is System.Windows.Controls.Button btn && btn.Tag is string hex)
-        {
-            OffWorkHexBox.Text = hex;
-        }
-    }
-
-    private void OnWorkingHexChanged(object sender, TextChangedEventArgs e)
-    {
-        if (_isLoadingUi || _settingsService == null || WorkingHexBox == null || WorkingColorPreview == null)
-            return;
-
-        string text = WorkingHexBox.Text.Trim();
-        if (AppSettingsService.TryParseColor(text, out System.Windows.Media.Color c))
-        {
-            WorkingColorPreview.Fill = new SolidColorBrush(c);
-            string normalized = text.StartsWith('#') ? text.ToUpperInvariant() : "#" + text.ToUpperInvariant();
-            _settingsService.SaveAndApply(s => s.WorkingColorHex = normalized);
-        }
-    }
-
-    private void OnOffWorkHexChanged(object sender, TextChangedEventArgs e)
-    {
-        if (_isLoadingUi || _settingsService == null || OffWorkHexBox == null || OffWorkColorPreview == null)
-            return;
-
-        string text = OffWorkHexBox.Text.Trim();
-        if (AppSettingsService.TryParseColor(text, out System.Windows.Media.Color c))
-        {
-            OffWorkColorPreview.Fill = new SolidColorBrush(c);
-            string normalized = text.StartsWith('#') ? text.ToUpperInvariant() : "#" + text.ToUpperInvariant();
-            _settingsService.SaveAndApply(s => s.OffWorkColorHex = normalized);
-        }
     }
 
     private void OnOpacitySliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)

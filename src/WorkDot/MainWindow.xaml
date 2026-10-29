@@ -13,14 +13,6 @@
         UseLayoutRounding="True">
 
     <Window.Resources>
-        <ImageBrush x:Key="BrushIconSun"
-                    ImageSource="pack://application:,,,/Assets/Icons/icons8-sun-96.png"
-                    Stretch="Uniform"
-                    RenderOptions.BitmapScalingMode="HighQuality"/>
-        <ImageBrush x:Key="BrushIconMoon"
-                    ImageSource="pack://application:,,,/Assets/Icons/icons8-crescent-moon-96.png"
-                    Stretch="Uniform"
-                    RenderOptions.BitmapScalingMode="HighQuality"/>
         <ImageBrush x:Key="BrushIconHome"
                     ImageSource="pack://application:,,,/Assets/Icons/icons8-home-96.png"
                     Stretch="Uniform"
@@ -64,8 +56,8 @@
                 </MenuItem>
                 <Separator/>
                 <MenuItem Header="상태 전환">
-                    <MenuItem Header="근무 (Sun)" Click="OnForceWorkingClick"/>
-                    <MenuItem Header="퇴근 (Moon)" Click="OnForceOffWorkClick"/>
+                    <MenuItem Header="근무중" Click="OnForceWorkingClick"/>
+                    <MenuItem Header="퇴근" Click="OnForceOffWorkClick"/>
                 </MenuItem>
                 <MenuItem Header="윈도우 경계 정렬" Click="OnSnapToTaskbarClick"/>
                 <MenuItem Header="숨기기" Click="OnHideOverlayClick"/>
@@ -87,22 +79,64 @@
 
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
 
-                <!-- 1. Status Chip: Sun (근무중) / Moon (퇴근) + 10s Idle Working Elapsed Time -->
+                <!-- 1. Status Chip: App-Icon Clock Gauge (8시간 기준 초록 게이지 / 8시간 달성 시 빨간 게이지) + 10s Idle Working Elapsed Time -->
                 <Border x:Name="StatusBadgeBorder"
                         CornerRadius="6"
                         Background="#1A10B981"
                         BorderBrush="#3310B981"
                         BorderThickness="1"
-                        Padding="7,5"
+                        Padding="6,4"
                         VerticalAlignment="Center"
                         ToolTip="근무중">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Rectangle x:Name="StatusIconRect"
-                                   Width="15" Height="15"
-                                   Fill="#10B981"
-                                   OpacityMask="{StaticResource BrushIconSun}"
-                                   RenderOptions.BitmapScalingMode="HighQuality"
-                                   VerticalAlignment="Center"/>
+                        <Canvas x:Name="ClockGaugeCanvas"
+                                Width="18" Height="18"
+                                VerticalAlignment="Center">
+                            <!-- Background Track Ring -->
+                            <Ellipse x:Name="ClockTrackRing"
+                                     Width="14.4" Height="14.4"
+                                     Canvas.Left="1.8" Canvas.Top="1.8"
+                                     Stroke="#27272A"
+                                     StrokeThickness="2.2"/>
+
+                            <!-- Full 360-degree Ring (8시간 달성 시 빨간 게이지) -->
+                            <Ellipse x:Name="ClockFullRing"
+                                     Width="14.4" Height="14.4"
+                                     Canvas.Left="1.8" Canvas.Top="1.8"
+                                     Stroke="#EF4444"
+                                     StrokeThickness="2.2"
+                                     Visibility="Collapsed"/>
+
+                            <!-- Partial Progress Arc (0 ~ 8시간 진행 중 초록 게이지) -->
+                            <Path x:Name="ClockGaugeArcPath"
+                                  Stroke="#10B981"
+                                  StrokeThickness="2.2"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"/>
+
+                            <!-- App-Icon Geometric Clock Hands -->
+                            <Path x:Name="ClockHandsPath"
+                                  Data="M 9,9 L 9,5.3 M 9,9 L 6.3,9"
+                                  Stroke="#FAFAFA"
+                                  StrokeThickness="1.6"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round"/>
+                            <Ellipse x:Name="ClockCenterPivot"
+                                     Width="2.4" Height="2.4"
+                                     Canvas.Left="7.8" Canvas.Top="7.8"
+                                     Fill="#FAFAFA"/>
+
+                            <!-- Signature WorkDot Status Orb on Ring -->
+                            <Ellipse x:Name="ClockTipCutout"
+                                     Width="5.2" Height="5.2"
+                                     Canvas.Left="11.2" Canvas.Top="1.8"
+                                     Fill="#09090B"/>
+                            <Ellipse x:Name="ClockTipDot"
+                                     Width="3.6" Height="3.6"
+                                     Canvas.Left="12.0" Canvas.Top="2.6"
+                                     Fill="#34D399"/>
+                        </Canvas>
 
                         <TextBlock x:Name="SubStatusText"
                                    Text=""
