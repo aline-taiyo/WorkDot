@@ -164,33 +164,7 @@ public partial class MainWindow : Window
 
     private static string? FormatWorkingElapsedTime(AttendanceSnapshot snapshot)
     {
-        if (!string.IsNullOrWhiteSpace(snapshot.ClockInTimeText) &&
-            TimeSpan.TryParse(snapshot.ClockInTimeText.Trim(), CultureInfo.InvariantCulture, out TimeSpan clockInTimeOfDay))
-        {
-            DateTime now = DateTime.Now;
-            DateTime clockInDateTime = now.Date.Add(clockInTimeOfDay);
-            if (clockInDateTime > now.AddMinutes(1))
-            {
-                clockInDateTime = clockInDateTime.AddDays(-1);
-            }
-
-            TimeSpan elapsed = now - clockInDateTime;
-            if (elapsed < TimeSpan.Zero)
-            {
-                elapsed = TimeSpan.Zero;
-            }
-
-            int hours = (int)elapsed.TotalHours;
-            int minutes = elapsed.Minutes;
-            return $"{hours:D2}:{minutes:D2}";
-        }
-
-        if (!string.IsNullOrWhiteSpace(snapshot.WorkedDurationText))
-        {
-            return snapshot.WorkedDurationText;
-        }
-
-        return null;
+        return snapshot.GetWorkingElapsedExcludingBreaks(DateTime.Now);
     }
 
     private void ApplySettingsAndVisuals()

@@ -15,6 +15,8 @@ public enum WorkStatusKind
     Working    // 근무중 (초록색)
 }
 
+public sealed record BreakTimeWindow(TimeSpan Start, TimeSpan End);
+
 public sealed record AttendanceSnapshot(
     WorkStatusKind Status,
     string StatusLabel,
@@ -22,7 +24,71 @@ public sealed record AttendanceSnapshot(
     string? ClockInTimeText,
     string? ClockOutTimeText,
     string? WorkedDurationText,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    IReadOnlyList<BreakTimeWindow>? BreakWindows = null)
+{
+    private static readonly IReadOnlyList<BreakTimeWindow> DefaultBreakWindows =
+    [
+        new BreakTimeWindow(new TimeSpan(12, 0, 0), new TimeSpan(13, 0, 0))
+    ];
+
+    /// <summary>
+    /// 다우오피스에서 수집된 출근 시각 및 휴게시간(fixedBreakTimeList / 기본 12:00~13:00)을 바탕으로
+    /// 휴게시간을 제외한 실근무 경과 시간(HH:mm)을 계산합니다.
+    /// </summary>
+    public string? GetWorkingElapsedExcludingBreaks(DateTime now)
+    {
+        if (!string.IsNullOrWhiteSpace(ClockInTimeText) &&
+            TimeSpan.TryParse(ClockInTimeText.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan clockInTod))
+        {
+            DateTime start = now.Date.Add(clockInTod);
+            if (start > now.AddMinutes(1))
+            {
+                start = start.AddDays(-1);
+            }
+
+            TimeSpan totalSpan = now - start;
+            if (totalSpan < TimeSpan.Zero)
+            {
+                totalSpan = TimeSpan.Zero;
+            }
+
+            var breaks = (BreakWindows != null && BreakWindows.Count > 0) ? BreakWindows : DefaultBreakWindows;
+            foreach (var bw in breaks)
+            {
+                DateTime bStart = start.Date.Add(bw.Start);
+                DateTime bEnd = start.Date.Add(bw.End);
+                if (bEnd <= bStart)
+                {
+                    bEnd = bEnd.AddDays(1);
+                }
+
+                DateTime overlapStart = start > bStart ? start : bStart;
+                DateTime overlapEnd = now < bEnd ? now : bEnd;
+                if (overlapEnd > overlapStart)
+                {
+                    totalSpan -= (overlapEnd - overlapStart);
+                }
+            }
+
+            if (totalSpan < TimeSpan.Zero)
+            {
+                totalSpan = TimeSpan.Zero;
+            }
+
+            int hours = (int)totalSpan.TotalHours;
+            int minutes = totalSpan.Minutes;
+            return $"{hours:D2}:{minutes:D2}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(WorkedDurationText))
+        {
+            return WorkedDurationText;
+        }
+
+        return null;
+    }
+}
 
 internal sealed record SavedCookieItem(
     string Name,
@@ -648,6 +714,30 @@ public sealed class DaouAttendanceService
             string? duration = root.TryGetProperty("duration", out var durProp) ? durProp.GetString() : null;
             string? badgeText = root.TryGetProperty("badgeText", out var bProp) ? bProp.GetString() : null;
 
+            List<BreakTimeWindow>? breakWindows = null;
+            if (root.TryGetProperty("breakRanges", out var brProp) && brProp.ValueKind == JsonValueKind.Array)
+            {
+                breakWindows = new List<BreakTimeWindow>();
+                foreach (var item in brProp.EnumerateArray())
+                {
+                    string? rangeStr = item.GetString();
+                    if (!string.IsNullOrWhiteSpace(rangeStr))
+                    {
+                        var parts = rangeStr.Split('~', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                        if (parts.Length == 2 &&
+                            TimeSpan.TryParse(parts[0], System.Globalization.CultureInfo.InvariantCulture, out TimeSpan bs) &&
+                            TimeSpan.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out TimeSpan be))
+                        {
+                            breakWindows.Add(new BreakTimeWindow(bs, be));
+                        }
+                    }
+                }
+            }
+            if ((breakWindows == null || breakWindows.Count == 0) && CurrentSnapshot.BreakWindows != null)
+            {
+                breakWindows = CurrentSnapshot.BreakWindows.ToList();
+            }
+
             if (state == "WORKING")
             {
                 string sub = !string.IsNullOrWhiteSpace(clockIn)
@@ -661,7 +751,8 @@ public sealed class DaouAttendanceService
                     clockIn,
                     clockOut,
                     duration,
-                    DateTime.Now));
+                    DateTime.Now,
+                    breakWindows));
             }
             else if (state == "OFF_WORK")
             {
@@ -678,7 +769,8 @@ public sealed class DaouAttendanceService
                     clockIn,
                     clockOut,
                     duration,
-                    DateTime.Now));
+                    DateTime.Now,
+                    breakWindows));
             }
         }
         catch
@@ -862,6 +954,16 @@ public sealed class DaouAttendanceService
                 let duration = null;
                 let badgeText = null;
                 let apiStatus = null;
+                const breakRangesSet = new Set();
+
+                const addBreakRange = (startStr, endStr) => {
+                    if (!startStr || !endStr) return;
+                    const sm = String(startStr).match(/([01]\d|2[0-3]):[0-5]\d/);
+                    const em = String(endStr).match(/([01]\d|2[0-3]):[0-5]\d/);
+                    if (sm && em) {
+                        breakRangesSet.add(`${sm[0]}~${em[0]}`);
+                    }
+                };
 
                 const yyyy = now.getFullYear();
                 const mm = pad2(now.getMonth() + 1);
@@ -870,7 +972,7 @@ public sealed class DaouAttendanceService
                 const todayDot = `${yyyy}.${mm}.${dd}`;
                 const todayCompact = `${yyyy}${mm}${dd}`;
 
-                // 전략 1: 가로챈 다우오피스 API JSON(__workdotApiLogs)에서 오늘 데이터 추출
+                // 전략 1: 가로챈 다우오피스 API JSON(__workdotApiLogs)에서 오늘 데이터 및 휴게시간(fixedBreakTimeList) 추출
                 if (Array.isArray(window.__workdotApiLogs)) {
                     for (let i = window.__workdotApiLogs.length - 1; i >= 0; i--) {
                         const entry = window.__workdotApiLogs[i];
@@ -883,7 +985,16 @@ public sealed class DaouAttendanceService
                                 return;
                             }
 
-                            const dVal = obj.date || obj.logDate || obj.workDate || obj.baseDate || obj.targetDate || obj.attndDate || obj.solarDate;
+                            // 다우오피스 근무그룹 휴게시간 목록 (fixedBreakTimeList) 추출
+                            if (Array.isArray(obj.fixedBreakTimeList)) {
+                                obj.fixedBreakTimeList.forEach(b => {
+                                    if (b && b.breakStartTime && b.breakEndTime) {
+                                        addBreakRange(b.breakStartTime, b.breakEndTime);
+                                    }
+                                });
+                            }
+
+                            const dVal = obj.date || obj.accrualDate || obj.logDate || obj.workDate || obj.baseDate || obj.targetDate || obj.attndDate || obj.solarDate;
                             if (typeof dVal === 'string') {
                                 const dClean = dVal.slice(0, 10);
                                 if (/^\d{4}[-.]?\d{2}[-.]?\d{2}/.test(dClean) &&
@@ -892,9 +1003,17 @@ public sealed class DaouAttendanceService
                                 }
                             }
 
-                            const inRaw = obj.clockInTime ?? obj.workInTime ?? obj.attndInTime ?? obj.inTime ?? obj.checkInTime ?? obj.realClockInTime;
-                            const outRaw = obj.clockOutTime ?? obj.workOutTime ?? obj.attndOutTime ?? obj.outTime ?? obj.checkOutTime ?? obj.realClockOutTime;
-                            const stRaw = obj.workStatus ?? obj.timelineStatus ?? obj.attndStatus ?? obj.workingStatus ?? obj.statusName ?? obj.stateName;
+                            // 일일 인정 근무시간(dailyWorkHoursDto.sumWorkingHours) 초 단위 추출
+                            if (obj.dailyWorkHoursDto && typeof obj.dailyWorkHoursDto.sumWorkingHours === 'number' && obj.dailyWorkHoursDto.sumWorkingHours > 0 && !duration) {
+                                const totalSec = obj.dailyWorkHoursDto.sumWorkingHours;
+                                const h = Math.floor(totalSec / 3600);
+                                const m = Math.floor((totalSec % 3600) / 60);
+                                duration = `${pad2(h)}:${pad2(m)}`;
+                            }
+
+                            const inRaw = obj.startWorkTime ?? obj.clockInTime ?? obj.workInTime ?? obj.attndInTime ?? obj.inTime ?? obj.checkInTime ?? obj.realClockInTime;
+                            const outRaw = obj.endWorkTime ?? obj.clockOutTime ?? obj.workOutTime ?? obj.attndOutTime ?? obj.outTime ?? obj.checkOutTime ?? obj.realClockOutTime;
+                            const stRaw = obj.workStatusName ?? obj.displayWorkType ?? obj.workStatus ?? obj.timelineStatus ?? obj.attndStatus ?? obj.workingStatus ?? obj.statusName ?? obj.stateName;
 
                             if (typeof inRaw === 'string' && timeOnlyRe.test(inRaw) && !clockIn) {
                                 const m = inRaw.match(timeOnlyRe)[0];
@@ -1001,6 +1120,34 @@ public sealed class DaouAttendanceService
                                 if (m && !isLiveClockValue(m[0])) clockOut = m[0];
                             } else if (/(?:퇴근시간|퇴근시각|퇴근)\s*[:：]?\s*(미등록|--|-)/.test(ownText)) {
                                 clockOutExplicitlyUnset = true;
+                            }
+                        }
+
+                        // 다우오피스 근무그룹 카드의 휴게시간 (예: "12:00 ~ 13:00(1h)") 추출
+                        if (/^(휴게시간|휴게)$/.test(ownText)) {
+                            const sib = el.nextElementSibling;
+                            if (sib) {
+                                const sibText = clean(sib.innerText);
+                                const rangeMatches = sibText.matchAll(/([01]\d|2[0-3]):[0-5]\d\s*~\s*([01]\d|2[0-3]):[0-5]\d/g);
+                                for (const rm of rangeMatches) {
+                                    addBreakRange(rm[1] ? rm[0].split('~')[0] : null, rm[0].split('~')[1]);
+                                }
+                            }
+                        }
+
+                        // 다우오피스 일일 요약의 총 근무시간 (예: "3h 15m 0s") 추출 (0h 0m 0s 제외)
+                        if (/^(총 근무시간|총근무시간|인정근무시간)$/.test(ownText) && !duration) {
+                            const sib = el.nextElementSibling;
+                            if (sib) {
+                                const sibText = clean(sib.innerText);
+                                const hmMatch = sibText.match(/(\d+)\s*h\s*(\d+)\s*m/i) || sibText.match(/(\d+)\s*시간\s*(\d+)\s*분/);
+                                if (hmMatch) {
+                                    const h = parseInt(hmMatch[1], 10);
+                                    const m = parseInt(hmMatch[2], 10);
+                                    if (h > 0 || m > 0) {
+                                        duration = `${pad2(h)}:${pad2(m)}`;
+                                    }
+                                }
                             }
                         }
                     }
@@ -1113,6 +1260,7 @@ public sealed class DaouAttendanceService
                     clockOut,
                     clockOutExplicitlyUnset,
                     duration,
+                    breakRanges: Array.from(breakRangesSet),
                     badgeText,
                     apiStatus,
                     clockInBtnFound,
