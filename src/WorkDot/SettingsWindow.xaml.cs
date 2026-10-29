@@ -24,8 +24,7 @@ public partial class SettingsWindow : Window
 
         string version = AppSettingsService.AppVersion;
         VersionBadgeText.Text = version;
-        FooterVersionText.Text = $"WorkDot {version}";
-        UpdateStatusText.Text = _autoUpdateService.LastStatusMessage;
+        CheckUpdateButton.ToolTip = _autoUpdateService.LastStatusMessage;
 
         _autoUpdateService.StatusChanged += OnAutoUpdateStatusChanged;
         Closed += (_, _) => _autoUpdateService.StatusChanged -= OnAutoUpdateStatusChanged;
@@ -37,9 +36,9 @@ public partial class SettingsWindow : Window
     {
         Dispatcher.Invoke(() =>
         {
-            if (UpdateStatusText != null)
+            if (CheckUpdateButton != null)
             {
-                UpdateStatusText.Text = status;
+                CheckUpdateButton.ToolTip = status;
             }
         });
     }
