@@ -572,9 +572,13 @@ public partial class MainWindow : Window
             ((UIElement)sender).ReleaseMouseCapture();
 
             var curStatus = _attendanceService.CurrentSnapshot.Status;
-            if (curStatus == WorkStatusKind.Working || curStatus == WorkStatusKind.Break)
+            if (curStatus == WorkStatusKind.Working)
             {
-                _attendanceService.ToggleBreakStatus();
+                _ = ExecuteBreakActionAsync(true);
+            }
+            else if (curStatus == WorkStatusKind.Break)
+            {
+                _ = ExecuteBreakActionAsync(false);
             }
 
             e.Handled = true;
@@ -830,6 +834,26 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task ExecuteBreakActionAsync(bool targetBreak)
+    {
+        if (_isActionBusy)
+            return;
+
+        _isActionBusy = true;
+        ApplySettingsAndVisuals();
+
+        try
+        {
+            _attendanceService.SetManualStatusOverride(targetBreak ? WorkStatusKind.Break : WorkStatusKind.Working);
+            await _attendanceService.TriggerBreakActionAsync(targetBreak);
+        }
+        finally
+        {
+            _isActionBusy = false;
+            ApplySettingsAndVisuals();
+        }
+    }
+
     private void OnContextMenuOpened(object sender, RoutedEventArgs e)
     {
         RecordInteraction();
@@ -901,12 +925,12 @@ public partial class MainWindow : Window
 
     private void OnForceWorkingClick(object sender, RoutedEventArgs e)
     {
-        _attendanceService.SetManualStatusOverride(WorkStatusKind.Working);
+        _ = ExecuteBreakActionAsync(false);
     }
 
     private void OnForceBreakClick(object sender, RoutedEventArgs e)
     {
-        _attendanceService.SetManualStatusOverride(WorkStatusKind.Break);
+        _ = ExecuteBreakActionAsync(true);
     }
 
     private void OnForceOffWorkClick(object sender, RoutedEventArgs e)

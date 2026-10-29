@@ -252,6 +252,11 @@ public sealed class DaouAttendanceService
             e.Cancel = true;
         };
 
+        coreWebView.ScriptDialogOpening += (_, args) =>
+        {
+            args.Accept();
+        };
+
         coreWebView.SourceChanged += async (_, _) =>
         {
             string current = coreWebView.Source ?? string.Empty;
@@ -693,6 +698,52 @@ public sealed class DaouAttendanceService
         }
     }
 
+    public async Task<(bool Success, string Message)> TriggerBreakActionAsync(bool toBreak)
+    {
+        if (_webView?.CoreWebView2 == null)
+            return (false, "WebView2가 아직 초기화되지 않았습니다.");
+
+        string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
+        if (IsLoginUrl(currentUrl) || !currentUrl.Contains("/ehr/", StringComparison.OrdinalIgnoreCase))
+        {
+            _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
+            await Task.Delay(1800);
+            currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
+            if (IsLoginUrl(currentUrl))
+                return (false, "그룹웨어 로그인이 필요합니다. 로그인 창을 열어주세요.");
+        }
+
+        string script = toBreak ? GetBreakInTriggerScript() : GetBreakOutTriggerScript();
+
+        try
+        {
+            string rawResult = await _webView.CoreWebView2.ExecuteScriptAsync(script);
+            string result = JsonSerializer.Deserialize<string>(rawResult) ?? "UNKNOWN";
+
+            if (result.StartsWith("OK:", StringComparison.Ordinal) || result.StartsWith("ALREADY_", StringComparison.Ordinal))
+            {
+                await Task.Delay(500);
+                string modalRaw = await _webView.CoreWebView2.ExecuteScriptAsync(GetConfirmModalClickScript());
+                string modalRes = JsonSerializer.Deserialize<string>(modalRaw) ?? "NO_MODAL";
+                if (modalRes.StartsWith("NEEDS_USER_INPUT", StringComparison.Ordinal))
+                {
+                    return (false, "다우오피스 추가 확인이 필요합니다.");
+                }
+
+                await Task.Delay(800);
+                await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
+
+                return (true, toBreak ? "휴게 상태로 전환되었습니다." : "근무중 상태로 전환되었습니다.");
+            }
+
+            return (false, $"다우오피스 페이지에서 {(toBreak ? "휴게" : "업무")} 버튼을 찾지 못했습니다 ({result}). 그룹웨어 창에서 직접 확인해주세요.");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"처리 중 오류: {ex.Message}");
+        }
+    }
+
     public void ClearManualStatusOverride()
     {
         _manualStatusOverride = null;
@@ -931,8 +982,36 @@ public sealed class DaouAttendanceService
                 }
             }
 
+            if (state == "BREAK")
+            {
+                string breakClockIn = !string.IsNullOrWhiteSpace(clockIn) ? clockIn : (CurrentSnapshot.ClockInTimeText ?? DateTime.Now.ToString("HH:mm"));
+                DateTime breakStart = _activeBreakStartTime ?? DateTime.Now;
+                _activeBreakStartTime ??= breakStart;
+                UpdateSnapshot(new AttendanceSnapshot(
+                    WorkStatusKind.Break,
+                    "휴게",
+                    $"휴게중 ({breakStart:HH:mm}~)",
+                    breakClockIn,
+                    null,
+                    duration,
+                    DateTime.Now,
+                    breakWindows,
+                    breakStart));
+                return;
+            }
+
             if (state == "WORKING")
             {
+                if (_activeBreakStartTime.HasValue)
+                {
+                    DateTime now = DateTime.Now;
+                    if (now > _activeBreakStartTime.Value)
+                    {
+                        _userBreakWindowsToday.Add(new BreakTimeWindow(_activeBreakStartTime.Value.TimeOfDay, now.TimeOfDay));
+                    }
+                    _activeBreakStartTime = null;
+                }
+
                 string sub = !string.IsNullOrWhiteSpace(clockIn)
                     ? $"출근 {clockIn}" + (!string.IsNullOrWhiteSpace(duration) ? $" · {duration}" : "")
                     : (!string.IsNullOrWhiteSpace(badgeText) ? badgeText : "정상 근무중");
@@ -1174,10 +1253,16 @@ public sealed class DaouAttendanceService
                     if (tag) {
                         const tagCls = (tag.className || '').toLowerCase();
                         const tagTxt = clean(tag.innerText);
-                        if (tagCls.includes('positive')) {
+                        if (tagTxt === '휴게' || tagTxt.includes('휴게') || tagTxt === '외출') {
+                            badgeText = '휴게';
+                            apiStatus = tagTxt;
+                        } else if (tagCls.includes('positive') || tagTxt === '업무' || tagTxt.includes('근무')) {
                             badgeText = '근무중';
                             apiStatus = tagTxt || 'ON';
-                        } else if (tagCls.includes('neutral') || tagTxt === '퇴근' || tagTxt === '업무종료') {
+                        } else if (tagTxt === '퇴근' || tagTxt === '업무종료') {
+                            badgeText = '퇴근';
+                            apiStatus = tagTxt || 'OFF';
+                        } else if (tagCls.includes('neutral')) {
                             badgeText = '퇴근';
                             apiStatus = tagTxt || 'OFF';
                         }
@@ -1215,6 +1300,16 @@ public sealed class DaouAttendanceService
                             if (Array.isArray(obj)) {
                                 obj.forEach(visit);
                                 return;
+                            }
+
+                            if (typeof obj.workStatusName === 'string') {
+                                if (obj.workStatusName === '휴게' || obj.workStatusName === '외출') {
+                                    badgeText = '휴게';
+                                    apiStatus = obj.workStatusName;
+                                } else if (obj.workStatusName === '업무' && !badgeText) {
+                                    badgeText = '근무중';
+                                    apiStatus = obj.workStatusName;
+                                }
                             }
 
                             // 다우오피스 근무그룹 휴게시간 목록 (fixedBreakTimeList) 추출
@@ -1475,7 +1570,12 @@ public sealed class DaouAttendanceService
 
                 let state = 'UNKNOWN';
 
-                if (clockInBtnFound && clockInBtnDisabled && clockOutBtnFound && !clockOutBtnDisabled && !hasValidClockOut) {
+                const combinedStatus = ((apiStatus || '') + ' ' + (badgeText || '')).toUpperCase();
+                const isBreakStatus = combinedStatus.includes('휴게') || combinedStatus.includes('BREAK') || combinedStatus.includes('외출');
+
+                if (isBreakStatus) {
+                    state = 'BREAK';
+                } else if (clockInBtnFound && clockInBtnDisabled && clockOutBtnFound && !clockOutBtnDisabled && !hasValidClockOut) {
                     state = 'WORKING';
                 } else if (hasValidClockIn && !hasValidClockOut) {
                     state = 'WORKING';
@@ -1484,10 +1584,10 @@ public sealed class DaouAttendanceService
                 } else if (clockInBtnFound && !clockInBtnDisabled) {
                     state = 'OFF_WORK';
                 } else {
-                    const combinedStatus = ((apiStatus || '') + ' ' + (badgeText || '')).toUpperCase();
                     if (combinedStatus.includes('WORKING') || combinedStatus.includes('WORK_IN') || combinedStatus.includes('ON_WORK') ||
                         combinedStatus.includes('근무중') || combinedStatus.includes('근무 중') ||
-                        combinedStatus.includes('업무중') || combinedStatus.includes('업무 중')) {
+                        combinedStatus.includes('업무중') || combinedStatus.includes('업무 중') ||
+                        combinedStatus.includes('업무')) {
                         state = 'WORKING';
                     } else if (combinedStatus.includes('WORK_OUT') || combinedStatus.includes('OFF_WORK') ||
                                combinedStatus.includes('업무종료') || combinedStatus.includes('출근전')) {
@@ -1496,6 +1596,16 @@ public sealed class DaouAttendanceService
                         state = 'LOADING';
                     }
                 }
+
+                const gadgetEl = document.querySelector('.lnb_gadget.gadget_attend, .attend_card');
+                const gadgetHtml = gadgetEl ? gadgetEl.innerHTML : '';
+                const candidateButtons = Array.from(document.querySelectorAll('button, a.btn, [role="button"], select, .work_status_wrap, .attend_btn, .status_btn')).map(el => ({
+                    tag: el.tagName,
+                    text: clean(el.innerText || el.textContent || ''),
+                    cls: el.className,
+                    id: el.id,
+                    disabled: el.disabled
+                })).filter(b => b.text && b.text.length < 30);
 
                 return JSON.stringify({
                     isLoginPage: false,
@@ -1511,7 +1621,18 @@ public sealed class DaouAttendanceService
                     clockInBtnFound,
                     clockInBtnDisabled,
                     clockOutBtnFound,
-                    clockOutBtnDisabled
+                    clockOutBtnDisabled,
+                    gadgetHtml,
+                    candidateButtons,
+                    apiLogs: (window.__workdotApiLogs || []).map(l => l.url),
+                    todayGadgetData: (window.__workdotApiLogs || []).find(l => (l.url || '').includes('gadget/today'))?.data,
+                    searchApi: (() => {
+                        try {
+                            const entries = (window.__workdotApiLogs || []).map(l => l.url);
+                            return entries;
+                        } catch(e) { return e.message; }
+                    })(),
+                    appJsMatch: null
                 });
             };
 
@@ -1600,12 +1721,99 @@ public sealed class DaouAttendanceService
         })();
         """;
 
+    private static string GetBreakInTriggerScript() => """
+        (() => {
+            const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+            // 1. 이미 휴게 상태인지 확인
+            const gadget = document.querySelector('.lnb_gadget.gadget_attend, .attend_card');
+            const curTag = gadget ? gadget.querySelector('.gadget_header .basic_tag .txt, .card_header .basic_tag .txt') : null;
+            if (curTag && clean(curTag.innerText) === '휴게') {
+                return 'ALREADY_BREAK';
+            }
+
+            // 2. 직접 휴게 버튼 탐색
+            let breakBtn = Array.from(document.querySelectorAll('.wrap_lnb_btn .menu_item, .select_list .menu_item, .list_menu button, .attend_btn button'))
+                .find(el => {
+                    const t = clean(el.innerText);
+                    return t === '휴게' || t.startsWith('휴게');
+                });
+
+            // 3. 버튼이 없으면 '근무상태변경' 드롭다운 버튼 클릭
+            if (!breakBtn) {
+                const triggerBtn = document.querySelector('.wrap_lnb_btn button, .attend_btn .wrap_lnb_btn button');
+                if (triggerBtn) {
+                    triggerBtn.click();
+                }
+                breakBtn = Array.from(document.querySelectorAll('.wrap_lnb_btn .menu_item, .select_list .menu_item, .list_menu button, .attend_btn button'))
+                    .find(el => {
+                        const t = clean(el.innerText);
+                        return t === '휴게' || t.startsWith('휴게');
+                    });
+            }
+
+            if (breakBtn) {
+                if (breakBtn.disabled) return 'DISABLED:휴게';
+                breakBtn.click();
+                return 'OK:BREAK_CLICKED';
+            }
+
+            return 'NOT_FOUND:BREAK_BTN';
+        })();
+        """;
+
+    private static string GetBreakOutTriggerScript() => """
+        (() => {
+            const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+            // 1. 이미 업무/근무중 상태인지 확인
+            const gadget = document.querySelector('.lnb_gadget.gadget_attend, .attend_card');
+            const curTag = gadget ? gadget.querySelector('.gadget_header .basic_tag .txt, .card_header .basic_tag .txt') : null;
+            if (curTag && (clean(curTag.innerText) === '업무' || clean(curTag.innerText) === '근무중')) {
+                return 'ALREADY_WORKING';
+            }
+
+            // 2. 직접 복귀 버튼이 있는 경우
+            const directBtns = Array.from(document.querySelectorAll('.attend_btn button, .lnb_gadget button, button'));
+            for (const btn of directBtns) {
+                const t = clean(btn.innerText);
+                if (t === '업무복귀' || t === '업무 시작' || t === '근무재개' || t === '업무재개' || t === '복귀') {
+                    if (!btn.disabled) {
+                        btn.click();
+                        return 'OK:DIRECT_RETURN:' + t;
+                    }
+                }
+            }
+
+            // 3. '근무상태변경' 드롭다운 버튼 클릭
+            const changeBtn = document.querySelector('.wrap_lnb_btn button, .attend_btn .wrap_lnb_btn button');
+            if (changeBtn) {
+                changeBtn.click();
+            }
+
+            // 4. '업무' 메뉴 아이템 찾기
+            const items = Array.from(document.querySelectorAll('.wrap_lnb_btn .menu_item, .select_list .menu_item, .list_menu button, .attend_btn button'));
+            const workItem = items.find(el => {
+                const t = clean(el.innerText);
+                return t === '업무' || t.startsWith('업무') || t === '정상근무' || t.includes('복귀');
+            });
+
+            if (workItem) {
+                if (workItem.disabled) return 'DISABLED:업무';
+                workItem.click();
+                return 'OK:WORK_CLICKED';
+            }
+
+            return 'NOT_FOUND:WORK_BTN';
+        })();
+        """;
+
     private static string GetConfirmModalClickScript() => """
         (() => {
             const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
 
             // 1. 다우오피스 EHR React 다이얼로그 (.dop_dialog.open) 처리
-            const dopDialog = document.querySelector('.dop_dialog.open, [role="dialog"]');
+            const dopDialog = document.querySelector('.dop_dialog.open, [role="dialog"], #settings-modal, .go_popup');
             if (dopDialog) {
                 const radios = Array.from(dopDialog.querySelectorAll('.dop_radio input[type="radio"]'));
                 if (radios.length === 1 && !radios[0].checked) {
@@ -1614,16 +1822,16 @@ public sealed class DaouAttendanceService
                     return 'NEEDS_USER_INPUT:WORK_LOCATION';
                 }
 
-                const majorBtn = dopDialog.querySelector('.popup_btn_area button.solid.major, button.solid.major');
+                const majorBtn = dopDialog.querySelector('.popup_btn_area button.solid.major, button.solid.major, .btn_major, .btn_major_s');
                 if (majorBtn && !majorBtn.disabled) {
                     majorBtn.click();
                     return 'CONFIRMED:DOP_DIALOG';
                 }
 
-                const btns = Array.from(dopDialog.querySelectorAll('.popup_btn_area button, button'));
+                const btns = Array.from(dopDialog.querySelectorAll('.popup_btn_area button, button, a.btn'));
                 for (const btn of btns) {
                     const t = clean(btn.innerText);
-                    if ((t === '확인' || t === '예' || t === '출근' || t === '퇴근') && !btn.disabled) {
+                    if ((t === '확인' || t === '예' || t === '변경' || t === '출근' || t === '퇴근' || t === '휴게' || t === '업무') && !btn.disabled) {
                         btn.click();
                         return 'CONFIRMED:' + t;
                     }
@@ -1634,7 +1842,7 @@ public sealed class DaouAttendanceService
             const modalBtns = Array.from(document.querySelectorAll('.go_popup button, .go_popup a.btn_major_s, .modal button, .layer_normal a.btn_major_s, button.btn_major, a.btn_major'));
             for (const btn of modalBtns) {
                 const t = clean(btn.innerText);
-                if (t === '확인' || t === '예' || t === '출근' || t === '퇴근') {
+                if (t === '확인' || t === '예' || t === '변경' || t === '출근' || t === '퇴근' || t === '휴게' || t === '업무') {
                     btn.click();
                     return 'CONFIRMED';
                 }
