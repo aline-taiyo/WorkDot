@@ -23,10 +23,10 @@
 ## 2. 위젯 화면 구성 및 8시간 근무 게이지 표시
 
 ### 시계 게이지 미니 모드 (8시간 기준) & 10초 미조작 시 실근무 경과 시간 표시
-![위젯 미니 모드 및 실근무 시간 표시](docs/screenshots/widget-mini.png)
+![위젯 미니 모드 및 실근무 시간 표시](docs/screenshots/widget-mini-v2.png)
 
 ### 마우스 호버 확장 모드 & 퇴근 확인 팝업
-![위젯 확장 모드 및 퇴근 확인 팝업](docs/screenshots/widget-expanded.png)
+![위젯 확장 모드 및 퇴근 확인 팝업](docs/screenshots/widget-expanded-v2.png)
 
 | 상태 / 모드 | 동작 설명 |
 | --- | --- |
@@ -76,7 +76,7 @@
 
 ## 5. 환경설정 및 자동 업데이트
 
-<img src="docs/screenshots/settings-window.png" width="440" alt="WorkDot 환경설정 창"/>
+<img src="docs/screenshots/settings-window-v2.png" width="440" alt="WorkDot 환경설정 창"/>
 
 위젯의 **톱니바퀴(환경설정)** 아이콘을 클릭하여 다음 항목을 설정할 수 있습니다 (`%LOCALAPPDATA%\WorkDot\settings.json`에 자동 저장).
 
