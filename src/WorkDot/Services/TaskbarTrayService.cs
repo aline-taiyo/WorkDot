@@ -14,6 +14,7 @@ public sealed class TaskbarTrayService : IDisposable
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _trayMenu;
     private Icon? _currentIcon;
+    private IntPtr _currentHIcon;
 
     private readonly ToolStripMenuItem _statusHeaderItem;
     private readonly ToolStripMenuItem _clockActionItem;
@@ -109,8 +110,14 @@ public sealed class TaskbarTrayService : IDisposable
         _trayMenu.Items.Add(new ToolStripMenuItem("⚙️ 환경설정 열기...", null, (_, _) => OpenSettingsRequested?.Invoke()));
         _trayMenu.Items.Add(new ToolStripMenuItem("❌ WorkDot 종료", null, (_, _) => ExitRequested?.Invoke()));
 
+        // 초기 아이콘을 먼저 할당한 후 Visible = true 설정 (WinForms Shell_NotifyIcon 누락 방지)
+        var (initIcon, initHIcon, _) = CreateDynamicDotIcon(System.Drawing.Color.FromArgb(255, 239, 68, 68));
+        _currentIcon = initIcon;
+        _currentHIcon = initHIcon;
+
         _notifyIcon = new NotifyIcon
         {
+            Icon = _currentIcon,
             Text = $"WorkDot {AppSettingsService.AppVersion}",
             ContextMenuStrip = _trayMenu,
             Visible = true
@@ -167,21 +174,25 @@ public sealed class TaskbarTrayService : IDisposable
             activeMediaColor.G,
             activeMediaColor.B);
 
-        var (newIcon, wpfImage) = CreateDynamicDotIcon(drawColor);
-        var prev = _currentIcon;
-        _currentIcon = newIcon;
-        _notifyIcon.Icon = newIcon;
+        var (newIcon, newHIcon, wpfImage) = CreateDynamicDotIcon(drawColor);
+        var prevIcon = _currentIcon;
+        var prevHIcon = _currentHIcon;
 
-        if (prev != null)
+        _currentIcon = newIcon;
+        _currentHIcon = newHIcon;
+        _notifyIcon.Icon = newIcon;
+        _notifyIcon.Visible = true;
+
+        prevIcon?.Dispose();
+        if (prevHIcon != IntPtr.Zero)
         {
-            DestroyIcon(prev.Handle);
-            prev.Dispose();
+            DestroyIcon(prevHIcon);
         }
 
         return wpfImage;
     }
 
-    private static (Icon TrayIcon, ImageSource WpfIcon) CreateDynamicDotIcon(System.Drawing.Color dotColor)
+    private static (Icon TrayIcon, IntPtr HIcon, ImageSource WpfIcon) CreateDynamicDotIcon(System.Drawing.Color dotColor)
     {
         using var bmp = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(bmp))
@@ -207,16 +218,15 @@ public sealed class TaskbarTrayService : IDisposable
         }
 
         IntPtr hIcon = bmp.GetHicon();
-        Icon icon = (Icon)Icon.FromHandle(hIcon).Clone();
-        DestroyIcon(hIcon);
+        Icon icon = Icon.FromHandle(hIcon);
 
         ImageSource wpfIcon = Imaging.CreateBitmapSourceFromHIcon(
-            icon.Handle,
+            hIcon,
             Int32Rect.Empty,
             BitmapSizeOptions.FromEmptyOptions());
         wpfIcon.Freeze();
 
-        return (icon, wpfIcon);
+        return (icon, hIcon, wpfIcon);
     }
 
     public void Dispose()
@@ -225,11 +235,13 @@ public sealed class TaskbarTrayService : IDisposable
         _notifyIcon.Dispose();
         _trayMenu.Dispose();
 
-        if (_currentIcon != null)
+        _currentIcon?.Dispose();
+        _currentIcon = null;
+
+        if (_currentHIcon != IntPtr.Zero)
         {
-            DestroyIcon(_currentIcon.Handle);
-            _currentIcon.Dispose();
-            _currentIcon = null;
+            DestroyIcon(_currentHIcon);
+            _currentHIcon = IntPtr.Zero;
         }
     }
 
