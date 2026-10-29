@@ -156,8 +156,9 @@ public partial class MainWindow : Window
     private void OnIdleTimerTick(object? sender, EventArgs e)
     {
         var snapshot = _attendanceService.CurrentSnapshot;
+        bool isWorkingOrBreak = snapshot.Status == WorkStatusKind.Working || snapshot.Status == WorkStatusKind.Break;
         int currentWorkedMin = (int)(snapshot.GetWorkingElapsedSpanExcludingBreaks(DateTime.Now)?.TotalMinutes ?? -1);
-        bool minuteChanged = snapshot.Status == WorkStatusKind.Working && currentWorkedMin != _lastRenderedWorkedMinute;
+        bool minuteChanged = isWorkingOrBreak && currentWorkedMin != _lastRenderedWorkedMinute;
 
         if (_isPointerDown || IsMouseOver || OverlayContextMenu.IsOpen)
         {
@@ -171,8 +172,7 @@ public partial class MainWindow : Window
         }
 
         double idleSeconds = (DateTime.UtcNow - _lastInteractionUtc).TotalSeconds;
-        bool shouldShowElapsed = idleSeconds >= IdleSecondsBeforeShowingElapsed &&
-                                 snapshot.Status == WorkStatusKind.Working;
+        bool shouldShowElapsed = idleSeconds >= IdleSecondsBeforeShowingElapsed && isWorkingOrBreak;
 
         if (shouldShowElapsed || _isIdleElapsedVisible || minuteChanged)
         {
@@ -218,28 +218,34 @@ public partial class MainWindow : Window
         ApplyGhostButtonTheme(iconFgColor);
 
         System.Windows.Media.Color greenGaugeColor = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#10B981");
+        System.Windows.Media.Color amberBreakColor = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F59E0B");
         System.Windows.Media.Color redFullColor = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#EF4444");
         System.Windows.Media.Color offWorkSlateColor = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#71717A");
 
         bool isWorking = snapshot.Status == WorkStatusKind.Working;
-        TimeSpan? workedSpan = isWorking ? snapshot.GetWorkingElapsedSpanExcludingBreaks(DateTime.Now) : null;
+        bool isBreak = snapshot.Status == WorkStatusKind.Break;
+        bool isWorkingOrBreak = isWorking || isBreak;
+
+        TimeSpan? workedSpan = isWorkingOrBreak ? snapshot.GetWorkingElapsedSpanExcludingBreaks(DateTime.Now) : null;
         double workedMinutes = workedSpan?.TotalMinutes ?? 0.0;
-        _lastRenderedWorkedMinute = isWorking ? (int)workedMinutes : -1;
+        _lastRenderedWorkedMinute = isWorkingOrBreak ? (int)workedMinutes : -1;
 
-        double gaugeRatio = isWorking ? Math.Clamp(workedMinutes / TargetWorkHoursMinutes, 0.0, 1.0) : 0.0;
-        bool isFull8Hours = isWorking && workedMinutes >= TargetWorkHoursMinutes;
+        double gaugeRatio = isWorkingOrBreak ? Math.Clamp(workedMinutes / TargetWorkHoursMinutes, 0.0, 1.0) : 0.0;
+        bool isFull8Hours = isWorkingOrBreak && workedMinutes >= TargetWorkHoursMinutes;
 
-        // 근무중 8시간 미만: 초록(#10B981), 8시간 달성(꽉 참): 빨강(#EF4444), 퇴근: 슬레이트(#71717A)
-        System.Windows.Media.Color activeStatusColor = isWorking
-            ? (isFull8Hours ? redFullColor : greenGaugeColor)
-            : offWorkSlateColor;
+        // 근무중 8시간 미만: 초록(#10B981), 8시간 달성(꽉 참): 빨강(#EF4444), 휴게: 앰버(#F59E0B), 퇴근: 슬레이트(#71717A)
+        System.Windows.Media.Color activeStatusColor = isBreak
+            ? amberBreakColor
+            : isWorking
+                ? (isFull8Hours ? redFullColor : greenGaugeColor)
+                : offWorkSlateColor;
         var activeBrush = new SolidColorBrush(activeStatusColor);
 
         bool isArmedHighlight = _isLongPressArmed && _isCursorInsideDuringLongPress;
         if (isArmedHighlight)
         {
-            // 꾹 누르기 완료 시 목표 상태 색상으로 배지를 강조 표시 (근무중->퇴근 빨강, 퇴근->출근 초록)
-            System.Windows.Media.Color readyColor = isWorking ? redFullColor : greenGaugeColor;
+            // 꾹 누르기 완료 시 목표 상태 색상으로 배지를 강조 표시 (근무중/휴게->퇴근 빨강, 퇴근->출근 초록)
+            System.Windows.Media.Color readyColor = isWorkingOrBreak ? redFullColor : greenGaugeColor;
             StatusBadgeBorder.Background = new SolidColorBrush(readyColor);
             StatusBadgeBorder.BorderBrush = new SolidColorBrush(readyColor);
         }
@@ -257,14 +263,17 @@ public partial class MainWindow : Window
                 activeStatusColor.B));
         }
 
-        UpdateClockGaugeVisuals(isWorking, gaugeRatio, isFull8Hours, isLightTheme, isArmedHighlight);
+        UpdateClockGaugeVisuals(isWorking, isBreak, gaugeRatio, isFull8Hours, isLightTheme, isArmedHighlight);
 
-        string? elapsedText = isWorking ? FormatWorkingElapsedTime(snapshot) : null;
+        string? elapsedText = isWorkingOrBreak ? FormatWorkingElapsedTime(snapshot) : null;
         int pct = (int)Math.Round(gaugeRatio * 100);
-        string actionHint = isWorking ? "길게 눌러 퇴근" : "길게 눌러 출근";
-        StatusBadgeBorder.ToolTip = isWorking && !string.IsNullOrWhiteSpace(elapsedText)
-            ? $"근무중 ({elapsedText} / 08:00 · {pct}%) · {snapshot.SubText} ({actionHint})"
-            : $"{(isWorking ? "근무중" : "퇴근")} · {snapshot.SubText} ({actionHint})";
+        string stateTitle = isBreak ? "휴게" : (isWorking ? "근무중" : "퇴근");
+        string actionHint = isBreak
+            ? "더블클릭: 근무중 전환 · 길게 눌러 퇴근"
+            : (isWorking ? "더블클릭: 휴게 전환 · 길게 눌러 퇴근" : "길게 눌러 출근");
+        StatusBadgeBorder.ToolTip = isWorkingOrBreak && !string.IsNullOrWhiteSpace(elapsedText)
+            ? $"{stateTitle} ({elapsedText} / 08:00 · {pct}%) · {snapshot.SubText} ({actionHint})"
+            : $"{stateTitle} · {snapshot.SubText} ({actionHint})";
 
         // 2. 드래그 중에는 무조건 미니모드(텍스트 숨김), 평소에는 10초 이상 미조작 시에만 근무중인 시간 표시
         if (_hasMovedDuringDrag)
@@ -284,7 +293,7 @@ public partial class MainWindow : Window
             SubStatusText.Foreground = new SolidColorBrush(redFullColor);
             SubStatusText.Visibility = Visibility.Visible;
         }
-        else if (_isIdleElapsedVisible && isWorking && !string.IsNullOrWhiteSpace(elapsedText))
+        else if (_isIdleElapsedVisible && isWorkingOrBreak && !string.IsNullOrWhiteSpace(elapsedText))
         {
             SubStatusText.Text = elapsedText;
             SubStatusText.Foreground = activeBrush;
@@ -307,10 +316,11 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 앱 아이콘 시계 디자인을 기반으로 8시간 기준 초록 게이지(0~100%) 및 8시간 달성 시 빨간 게이지를 렌더링합니다.
+    /// 앱 아이콘 시계 디자인을 기반으로 8시간 기준 초록 게이지(0~100%), 휴게(앰버 일시정지), 8시간 달성 시 빨간 게이지를 렌더링합니다.
     /// </summary>
     private void UpdateClockGaugeVisuals(
         bool isWorking,
+        bool isBreak,
         double gaugeRatio,
         bool isFull8Hours,
         bool isLightTheme,
@@ -320,6 +330,8 @@ public partial class MainWindow : Window
         const double cy = 9.0;
         const double r = 7.2;
 
+        bool isWorkingOrBreak = isWorking || isBreak;
+
         if (isArmedHighlight)
         {
             var whiteBrush = System.Windows.Media.Brushes.White;
@@ -327,10 +339,13 @@ public partial class MainWindow : Window
             ClockFullRing.Visibility = Visibility.Visible;
             ClockFullRing.Stroke = whiteBrush;
             ClockGaugeArcPath.Visibility = Visibility.Collapsed;
+            ClockHandsPath.Visibility = Visibility.Visible;
+            ClockCenterPivot.Visibility = Visibility.Visible;
+            ClockPauseBarsPath.Visibility = Visibility.Collapsed;
             ClockHandsPath.Stroke = whiteBrush;
             ClockCenterPivot.Fill = whiteBrush;
 
-            System.Windows.Media.Color readyBg = isWorking
+            System.Windows.Media.Color readyBg = isWorkingOrBreak
                 ? (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#EF4444")
                 : (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#10B981");
             ClockTipCutout.Fill = new SolidColorBrush(readyBg);
@@ -344,7 +359,7 @@ public partial class MainWindow : Window
             : (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#09090B");
         ClockTipCutout.Fill = new SolidColorBrush(cutoutColor);
 
-        if (!isWorking)
+        if (!isWorkingOrBreak)
         {
             // 퇴근 상태: 비어 있는 트랙 링 + 슬레이트 바늘 및 도트
             ClockTrackRing.Stroke = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
@@ -354,6 +369,9 @@ public partial class MainWindow : Window
 
             var mutedBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
                 isLightTheme ? "#71717A" : "#A1A1AA"));
+            ClockHandsPath.Visibility = Visibility.Visible;
+            ClockCenterPivot.Visibility = Visibility.Visible;
+            ClockPauseBarsPath.Visibility = Visibility.Collapsed;
             ClockHandsPath.Stroke = mutedBrush;
             ClockCenterPivot.Fill = mutedBrush;
             ClockTipDot.Fill = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
@@ -362,12 +380,46 @@ public partial class MainWindow : Window
             return;
         }
 
-        // 근무중 상태: 8시간 미만 초록 게이지(#10B981), 8시간 이상(꽉 참) 빨간 게이지(#EF4444)
         ClockTrackRing.Stroke = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
             isLightTheme ? "#E4E4E7" : "#27272A"));
 
+        if (isBreak)
+        {
+            // 휴게 상태: 시계 내부에 일시정지(||) 아이콘 표시, 앰버(#F59E0B) 게이지 표시
+            var amberBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F59E0B"));
+            var brightAmberBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#FBBF24"));
+
+            ClockHandsPath.Visibility = Visibility.Collapsed;
+            ClockCenterPivot.Visibility = Visibility.Collapsed;
+            ClockPauseBarsPath.Stroke = brightAmberBrush;
+            ClockPauseBarsPath.Visibility = Visibility.Visible;
+
+            if (isFull8Hours || gaugeRatio >= 0.995)
+            {
+                ClockFullRing.Stroke = amberBrush;
+                ClockFullRing.Visibility = Visibility.Visible;
+                ClockGaugeArcPath.Visibility = Visibility.Collapsed;
+                ClockTipDot.Fill = brightAmberBrush;
+                PositionClockTipOrb(cx, cy, r, -42.0);
+            }
+            else
+            {
+                ClockFullRing.Visibility = Visibility.Collapsed;
+                ClockGaugeArcPath.Stroke = amberBrush;
+                ClockGaugeArcPath.Visibility = Visibility.Visible;
+                double endDeg = SetArcGeometry(cx, cy, r, gaugeRatio);
+                ClockTipDot.Fill = brightAmberBrush;
+                PositionClockTipOrb(cx, cy, r, endDeg);
+            }
+            return;
+        }
+
+        // 근무중 상태: 시계 바늘 표시 + 8시간 미만 초록 게이지(#10B981), 8시간 이상(꽉 참) 빨간 게이지(#EF4444)
         var handsBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
             isLightTheme ? "#18181B" : "#FAFAFA"));
+        ClockHandsPath.Visibility = Visibility.Visible;
+        ClockCenterPivot.Visibility = Visibility.Visible;
+        ClockPauseBarsPath.Visibility = Visibility.Collapsed;
         ClockHandsPath.Stroke = handsBrush;
         ClockCenterPivot.Fill = handsBrush;
 
@@ -391,37 +443,42 @@ public partial class MainWindow : Window
             ClockGaugeArcPath.Stroke = greenBrush;
             ClockGaugeArcPath.Visibility = Visibility.Visible;
 
-            double sweepDeg = Math.Clamp(gaugeRatio * 360.0, 22.0, 355.0);
-            double startDeg = -90.0;
-            double endDeg = startDeg + sweepDeg;
-
-            double startRad = startDeg * Math.PI / 180.0;
-            double endRad = endDeg * Math.PI / 180.0;
-
-            System.Windows.Point startPt = new(cx + Math.Cos(startRad) * r, cy + Math.Sin(startRad) * r);
-            System.Windows.Point endPt = new(cx + Math.Cos(endRad) * r, cy + Math.Sin(endRad) * r);
-
-            var figure = new PathFigure
-            {
-                StartPoint = startPt,
-                IsClosed = false,
-                IsFilled = false
-            };
-            figure.Segments.Add(new ArcSegment(
-                endPt,
-                new System.Windows.Size(r, r),
-                0.0,
-                isLargeArc: sweepDeg > 180.0,
-                SweepDirection.Clockwise,
-                isStroked: true));
-
-            var geom = new PathGeometry();
-            geom.Figures.Add(figure);
-            ClockGaugeArcPath.Data = geom;
-
+            double endDeg = SetArcGeometry(cx, cy, r, gaugeRatio);
             ClockTipDot.Fill = brightGreenBrush;
             PositionClockTipOrb(cx, cy, r, endDeg);
         }
+    }
+
+    private double SetArcGeometry(double cx, double cy, double r, double gaugeRatio)
+    {
+        double sweepDeg = Math.Clamp(gaugeRatio * 360.0, 22.0, 355.0);
+        double startDeg = -90.0;
+        double endDeg = startDeg + sweepDeg;
+
+        double startRad = startDeg * Math.PI / 180.0;
+        double endRad = endDeg * Math.PI / 180.0;
+
+        System.Windows.Point startPt = new(cx + Math.Cos(startRad) * r, cy + Math.Sin(startRad) * r);
+        System.Windows.Point endPt = new(cx + Math.Cos(endRad) * r, cy + Math.Sin(endRad) * r);
+
+        var figure = new PathFigure
+        {
+            StartPoint = startPt,
+            IsClosed = false,
+            IsFilled = false
+        };
+        figure.Segments.Add(new ArcSegment(
+            endPt,
+            new System.Windows.Size(r, r),
+            0.0,
+            isLargeArc: sweepDeg > 180.0,
+            SweepDirection.Clockwise,
+            isStroked: true));
+
+        var geom = new PathGeometry();
+        geom.Figures.Add(figure);
+        ClockGaugeArcPath.Data = geom;
+        return endDeg;
     }
 
     private void PositionClockTipOrb(double cx, double cy, double r, double angleDeg)
@@ -501,11 +558,34 @@ public partial class MainWindow : Window
         if (dep != null && IsInsideButton(dep))
             return;
 
+        bool pressedStatusIcon = dep == null || !IsInsideElement(dep, ActionPanel);
+
+        // 더블클릭 시 휴게 <-> 근무중 즉시 전환
+        if (e.ClickCount == 2 && pressedStatusIcon && !_isActionBusy)
+        {
+            _longPressTimer.Stop();
+            _isPointerDown = false;
+            _hasMovedDuringDrag = false;
+            _isLongPressArmed = false;
+            _isCursorInsideDuringLongPress = false;
+            _snapService.IsDraggingOverlay = false;
+            ((UIElement)sender).ReleaseMouseCapture();
+
+            var curStatus = _attendanceService.CurrentSnapshot.Status;
+            if (curStatus == WorkStatusKind.Working || curStatus == WorkStatusKind.Break)
+            {
+                _attendanceService.ToggleBreakStatus();
+            }
+
+            e.Handled = true;
+            return;
+        }
+
         _isPointerDown = true;
         _hasMovedDuringDrag = false;
         _isLongPressArmed = false;
         _isCursorInsideDuringLongPress = true;
-        _isPressOnStatusIcon = dep == null || !IsInsideElement(dep, ActionPanel);
+        _isPressOnStatusIcon = pressedStatusIcon;
 
         _longPressTimer.Stop();
         if (_isPressOnStatusIcon && !_isActionBusy)
@@ -684,8 +764,8 @@ public partial class MainWindow : Window
 
         var snapshot = _attendanceService.CurrentSnapshot;
 
-        // 근무중일 때 꾹 누르고 위젯 안에서 떼면 "퇴근 할래요?" Y/N 팝업 표시
-        if (snapshot.Status == WorkStatusKind.Working)
+        // 근무중 또는 휴게 상태일 때 꾹 누르고 위젯 안에서 떼면 "퇴근 할래요?" Y/N 팝업 표시
+        if (snapshot.Status == WorkStatusKind.Working || snapshot.Status == WorkStatusKind.Break)
         {
             var confirmPopup = new ConfirmClockOutWindow(this);
             bool confirmed = confirmPopup.ShowDialog() == true && confirmPopup.IsConfirmed;
@@ -822,6 +902,11 @@ public partial class MainWindow : Window
     private void OnForceWorkingClick(object sender, RoutedEventArgs e)
     {
         _attendanceService.SetManualStatusOverride(WorkStatusKind.Working);
+    }
+
+    private void OnForceBreakClick(object sender, RoutedEventArgs e)
+    {
+        _attendanceService.SetManualStatusOverride(WorkStatusKind.Break);
     }
 
     private void OnForceOffWorkClick(object sender, RoutedEventArgs e)

@@ -11,8 +11,9 @@ public enum WorkStatusKind
 {
     Unknown,
     NeedsLogin,
-    OffWork,   // 퇴근 / 미출근 (빨간색)
-    Working    // 근무중 (초록색)
+    OffWork,   // 퇴근 / 미출근
+    Working,   // 근무중 (초록/만충 시 빨강 게이지)
+    Break      // 휴게 / 일시정지 (더블클릭으로 전환, 앰버 게이지)
 }
 
 public sealed record BreakTimeWindow(TimeSpan Start, TimeSpan End);
@@ -25,7 +26,8 @@ public sealed record AttendanceSnapshot(
     string? ClockOutTimeText,
     string? WorkedDurationText,
     DateTime UpdatedAt,
-    IReadOnlyList<BreakTimeWindow>? BreakWindows = null)
+    IReadOnlyList<BreakTimeWindow>? BreakWindows = null,
+    DateTime? ActiveBreakStart = null)
 {
     private static readonly IReadOnlyList<BreakTimeWindow> DefaultBreakWindows =
     [
@@ -33,21 +35,25 @@ public sealed record AttendanceSnapshot(
     ];
 
     /// <summary>
-    /// 다우오피스에서 수집된 출근 시각 및 휴게시간(fixedBreakTimeList / 기본 12:00~13:00)을 바탕으로
+    /// 다우오피스에서 수집된 출근 시각 및 휴게시간(fixedBreakTimeList / 기본 12:00~13:00 / 사용자 수동 휴게)을 바탕으로
     /// 휴게시간을 제외한 실근무 경과 시간(TimeSpan)을 계산합니다.
     /// </summary>
     public TimeSpan? GetWorkingElapsedSpanExcludingBreaks(DateTime now)
     {
+        DateTime effectiveNow = (ActiveBreakStart.HasValue && now > ActiveBreakStart.Value)
+            ? ActiveBreakStart.Value
+            : now;
+
         if (!string.IsNullOrWhiteSpace(ClockInTimeText) &&
             TimeSpan.TryParse(ClockInTimeText.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan clockInTod))
         {
-            DateTime start = now.Date.Add(clockInTod);
-            if (start > now.AddMinutes(1))
+            DateTime start = effectiveNow.Date.Add(clockInTod);
+            if (start > effectiveNow.AddMinutes(1))
             {
                 start = start.AddDays(-1);
             }
 
-            TimeSpan totalSpan = now - start;
+            TimeSpan totalSpan = effectiveNow - start;
             if (totalSpan < TimeSpan.Zero)
             {
                 totalSpan = TimeSpan.Zero;
@@ -64,7 +70,7 @@ public sealed record AttendanceSnapshot(
                 }
 
                 DateTime overlapStart = start > bStart ? start : bStart;
-                DateTime overlapEnd = now < bEnd ? now : bEnd;
+                DateTime overlapEnd = effectiveNow < bEnd ? effectiveNow : bEnd;
                 if (overlapEnd > overlapStart)
                 {
                     totalSpan -= (overlapEnd - overlapStart);
@@ -136,6 +142,9 @@ public sealed class DaouAttendanceService
     private DateTime _lastAutoLoginAttempt = DateTime.MinValue;
     private WorkStatusKind? _manualStatusOverride;
     private DateTime _manualOverrideDate;
+    private DateTime? _activeBreakStartTime;
+    private DateTime _userBreaksDate = DateTime.Today;
+    private readonly List<BreakTimeWindow> _userBreakWindowsToday = new();
 
     public AttendanceSnapshot CurrentSnapshot { get; private set; } = new(
         WorkStatusKind.OffWork,
@@ -645,15 +654,61 @@ public sealed class DaouAttendanceService
     public void ClearManualStatusOverride()
     {
         _manualStatusOverride = null;
+        _activeBreakStartTime = null;
+    }
+
+    public void ToggleBreakStatus()
+    {
+        if (CurrentSnapshot.Status == WorkStatusKind.Working)
+        {
+            SetManualStatusOverride(WorkStatusKind.Break);
+        }
+        else if (CurrentSnapshot.Status == WorkStatusKind.Break)
+        {
+            SetManualStatusOverride(WorkStatusKind.Working);
+        }
     }
 
     public void SetManualStatusOverride(WorkStatusKind status)
     {
+        if (_userBreaksDate != DateTime.Today)
+        {
+            _userBreaksDate = DateTime.Today;
+            _userBreakWindowsToday.Clear();
+        }
+
+        // 휴게 상태에서 근무중/퇴근으로 돌아올 때 방금까지의 수동 휴게 구간을 휴게 목록에 누적
+        if (_activeBreakStartTime.HasValue && status != WorkStatusKind.Break)
+        {
+            DateTime now = DateTime.Now;
+            if (now > _activeBreakStartTime.Value)
+            {
+                _userBreakWindowsToday.Add(new BreakTimeWindow(_activeBreakStartTime.Value.TimeOfDay, now.TimeOfDay));
+            }
+            _activeBreakStartTime = null;
+        }
+
         _manualStatusOverride = status;
         _manualOverrideDate = DateTime.Today;
 
+        var mergedBreaks = MergeBreakWindows(CurrentSnapshot.BreakWindows, _userBreakWindowsToday);
         string nowTime = DateTime.Now.ToString("HH:mm");
-        if (status == WorkStatusKind.Working)
+
+        if (status == WorkStatusKind.Break)
+        {
+            _activeBreakStartTime ??= DateTime.Now;
+            UpdateSnapshot(new AttendanceSnapshot(
+                WorkStatusKind.Break,
+                "휴게",
+                $"휴게중 ({_activeBreakStartTime.Value:HH:mm}~)",
+                CurrentSnapshot.ClockInTimeText ?? nowTime,
+                null,
+                CurrentSnapshot.WorkedDurationText,
+                DateTime.Now,
+                mergedBreaks,
+                _activeBreakStartTime));
+        }
+        else if (status == WorkStatusKind.Working)
         {
             UpdateSnapshot(new AttendanceSnapshot(
                 WorkStatusKind.Working,
@@ -663,7 +718,8 @@ public sealed class DaouAttendanceService
                 null,
                 CurrentSnapshot.WorkedDurationText,
                 DateTime.Now,
-                CurrentSnapshot.BreakWindows));
+                mergedBreaks,
+                null));
         }
         else
         {
@@ -675,8 +731,33 @@ public sealed class DaouAttendanceService
                 nowTime,
                 CurrentSnapshot.WorkedDurationText,
                 DateTime.Now,
-                CurrentSnapshot.BreakWindows));
+                mergedBreaks,
+                null));
         }
+    }
+
+    private static IReadOnlyList<BreakTimeWindow> MergeBreakWindows(
+        IReadOnlyList<BreakTimeWindow>? baseBreaks,
+        IReadOnlyList<BreakTimeWindow> userBreaks)
+    {
+        var result = new List<BreakTimeWindow>();
+        if (baseBreaks != null && baseBreaks.Count > 0)
+        {
+            result.AddRange(baseBreaks);
+        }
+        else
+        {
+            result.Add(new BreakTimeWindow(new TimeSpan(12, 0, 0), new TimeSpan(13, 0, 0)));
+        }
+
+        foreach (var ub in userBreaks)
+        {
+            if (!result.Contains(ub))
+            {
+                result.Add(ub);
+            }
+        }
+        return result;
     }
 
     public async Task ProbeDomAndApiStatusAsync(CoreWebView2 webView)
@@ -777,8 +858,30 @@ public sealed class DaouAttendanceService
                 breakWindows = CurrentSnapshot.BreakWindows.ToList();
             }
 
+            if (_userBreaksDate == DateTime.Today && _userBreakWindowsToday.Count > 0)
+            {
+                breakWindows = MergeBreakWindows(breakWindows, _userBreakWindowsToday).ToList();
+            }
+
             if (_manualStatusOverride.HasValue && _manualOverrideDate == DateTime.Today)
             {
+                if (_manualStatusOverride.Value == WorkStatusKind.Break)
+                {
+                    string breakClockIn = !string.IsNullOrWhiteSpace(clockIn) ? clockIn : (CurrentSnapshot.ClockInTimeText ?? DateTime.Now.ToString("HH:mm"));
+                    DateTime breakStart = _activeBreakStartTime ?? DateTime.Now;
+                    UpdateSnapshot(new AttendanceSnapshot(
+                        WorkStatusKind.Break,
+                        "휴게",
+                        $"휴게중 ({breakStart:HH:mm}~)",
+                        breakClockIn,
+                        null,
+                        duration,
+                        DateTime.Now,
+                        breakWindows,
+                        breakStart));
+                    return;
+                }
+
                 state = _manualStatusOverride.Value == WorkStatusKind.Working ? "WORKING" : "OFF_WORK";
                 if (state == "WORKING" && string.IsNullOrWhiteSpace(clockIn))
                 {

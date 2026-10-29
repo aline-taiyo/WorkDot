@@ -57,6 +57,7 @@
                 <Separator/>
                 <MenuItem Header="상태 전환">
                     <MenuItem Header="근무중" Click="OnForceWorkingClick"/>
+                    <MenuItem Header="휴게" Click="OnForceBreakClick"/>
                     <MenuItem Header="퇴근" Click="OnForceOffWorkClick"/>
                 </MenuItem>
                 <MenuItem Header="윈도우 경계 정렬" Click="OnSnapToTaskbarClick"/>
@@ -126,6 +127,15 @@
                                      Width="2.4" Height="2.4"
                                      Canvas.Left="7.8" Canvas.Top="7.8"
                                      Fill="#FAFAFA"/>
+
+                            <!-- Break (휴게) Pause Bars Inside Clock Ring -->
+                            <Path x:Name="ClockPauseBarsPath"
+                                  Data="M 7.5,6.4 L 7.5,11.6 M 10.5,6.4 L 10.5,11.6"
+                                  Stroke="#FBBF24"
+                                  StrokeThickness="1.7"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  Visibility="Collapsed"/>
 
                             <!-- Signature WorkDot Status Orb on Ring -->
                             <Ellipse x:Name="ClockTipCutout"

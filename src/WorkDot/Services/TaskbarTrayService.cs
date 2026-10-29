@@ -48,8 +48,12 @@ public sealed class TaskbarTrayService : IDisposable
         AttendanceSnapshot snapshot,
         System.Windows.Media.Color activeMediaColor)
     {
-        bool isWorking = snapshot.Status == WorkStatusKind.Working;
-        string stateText = isWorking ? "근무중" : "퇴근";
+        string stateText = snapshot.Status switch
+        {
+            WorkStatusKind.Working => "근무중",
+            WorkStatusKind.Break => "휴게",
+            _ => "퇴근"
+        };
 
         string tooltip = $"WorkDot ({stateText}) · {snapshot.SubText}";
         _notifyIcon.Text = tooltip.Length > 60 ? tooltip[..60] : tooltip;
