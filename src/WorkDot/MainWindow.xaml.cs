@@ -4,7 +4,6 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using WorkDot.Services;
 
@@ -96,11 +95,6 @@ public partial class MainWindow : Window
 
     private async void OnMainWindowLoaded(object sender, RoutedEventArgs e)
     {
-        if (Resources["PulseStoryboard"] is Storyboard pulse)
-        {
-            pulse.Begin(this, true);
-        }
-
         ApplySettingsAndVisuals();
 
         _snapService.Initialize();
@@ -114,7 +108,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            SubStatusText.Text = $"오류: {ex.Message}";
+            StatusBadgeBorder.ToolTip = $"오류: {ex.Message}";
         }
     }
 
@@ -132,32 +126,25 @@ public partial class MainWindow : Window
         CapsuleScaleTransform.ScaleY = settings.WidgetScale;
 
         bool isLightTheme = _settingsService.IsEffectiveLightTheme();
+        System.Windows.Media.Color iconFgColor;
         if (isLightTheme)
         {
             CapsuleBorder.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#FFFFFF"));
             CapsuleBorder.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E4E4E7"));
             ActionDivider.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E4E4E7"));
-            SubStatusText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#52525B"));
-
-            SnapBadge.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F4F4F5"));
-            SnapBadge.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E4E4E7"));
-            SnapBadgeText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#71717A"));
-
-            ApplyGhostButtonTheme((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#71717A"));
+            SnapClipIconRect.Fill = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#71717A"));
+            iconFgColor = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#52525B");
         }
         else
         {
             CapsuleBorder.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#09090B"));
             CapsuleBorder.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#27272A"));
             ActionDivider.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#27272A"));
-            SubStatusText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#A1A1AA"));
-
-            SnapBadge.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#18181B"));
-            SnapBadge.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#27272A"));
-            SnapBadgeText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#71717A"));
-
-            ApplyGhostButtonTheme((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#A1A1AA"));
+            SnapClipIconRect.Fill = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#A1A1AA"));
+            iconFgColor = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#A1A1AA");
         }
+
+        ApplyGhostButtonTheme(iconFgColor);
 
         System.Windows.Media.Color workingColor = AppSettingsService.ParseColorOrDefault(settings.WorkingColorHex, "#10B981");
         System.Windows.Media.Color offWorkColor = AppSettingsService.ParseColorOrDefault(settings.OffWorkColorHex, "#EF4444");
@@ -166,7 +153,7 @@ public partial class MainWindow : Window
         System.Windows.Media.Color activeStatusColor = isWorking ? workingColor : offWorkColor;
         var activeBrush = new SolidColorBrush(activeStatusColor);
 
-        // Status Badge Chip (Soft Tinted Background + Subtle Border)
+        // 1. Sun (근무중) / Moon (퇴근) Status Chip
         StatusBadgeBorder.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(
             isLightTheme ? (byte)22 : (byte)28,
             activeStatusColor.R,
@@ -178,57 +165,70 @@ public partial class MainWindow : Window
             activeStatusColor.G,
             activeStatusColor.B));
 
-        StatusCoreDot.Fill = activeBrush;
-        PulseRing.Fill = activeBrush;
-        StatusTitleText.Text = isWorking ? "근무중" : "퇴근";
-        StatusTitleText.Foreground = activeBrush;
+        StatusIconRect.OpacityMask = (System.Windows.Media.Brush)Resources[isWorking ? "BrushIconSun" : "BrushIconMoon"];
+        StatusIconRect.Fill = activeBrush;
+        StatusBadgeBorder.ToolTip = $"{(isWorking ? "근무중" : "퇴근")} · {snapshot.SubText}";
 
-        if (!_isAwaitingInlineConfirm)
+        // 2. 텍스트 최소화: 확인/로그인 외에는 출퇴근 시각(HH:mm)만 짧게 표시하거나 아예 숨김
+        if (_isActionBusy)
         {
-            SubStatusText.Text = snapshot.SubText;
-        }
-
-        // shadcn/ui Neutral Action Button (색상 충돌을 피하고 확인 단계에서만 시그널 컬러 강조)
-        if (snapshot.Status == WorkStatusKind.NeedsLogin)
-        {
-            PrimaryActionButton.Content = "로그인";
-            PrimaryActionButton.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(isLightTheme ? "#09090B" : "#FAFAFA"));
-            PrimaryActionButton.BorderBrush = PrimaryActionButton.Background;
-            PrimaryActionButton.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(isLightTheme ? "#FAFAFA" : "#09090B"));
-            PrimaryActionButton.ToolTip = "다우오피스 로그인 창 열기";
+            SubStatusText.Text = "...";
+            SubStatusText.Foreground = activeBrush;
+            SubStatusText.Visibility = Visibility.Visible;
         }
         else if (_isAwaitingInlineConfirm)
         {
             System.Windows.Media.Color confirmColor = isWorking ? offWorkColor : workingColor;
-            PrimaryActionButton.Content = isWorking ? "퇴근 확인" : "출근 확인";
-            PrimaryActionButton.Background = new SolidColorBrush(confirmColor);
-            PrimaryActionButton.BorderBrush = new SolidColorBrush(confirmColor);
-            PrimaryActionButton.Foreground = GetContrastingTextBrush(confirmColor);
+            SubStatusText.Text = isWorking ? "퇴근?" : "출근?";
+            SubStatusText.Foreground = new SolidColorBrush(confirmColor);
+            SubStatusText.Visibility = Visibility.Visible;
         }
-        else if (isWorking)
+        else if (snapshot.Status == WorkStatusKind.NeedsLogin)
         {
-            PrimaryActionButton.Content = "퇴근하기";
-            PrimaryActionButton.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(isLightTheme ? "#F4F4F5" : "#18181B"));
-            PrimaryActionButton.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(isLightTheme ? "#E4E4E7" : "#27272A"));
-            PrimaryActionButton.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(isLightTheme ? "#09090B" : "#FAFAFA"));
-            PrimaryActionButton.ToolTip = "클릭하여 퇴근 처리";
+            SubStatusText.Text = "로그인";
+            SubStatusText.Foreground = activeBrush;
+            SubStatusText.Visibility = Visibility.Visible;
         }
         else
         {
-            PrimaryActionButton.Content = "출근하기";
-            PrimaryActionButton.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(isLightTheme ? "#09090B" : "#FAFAFA"));
-            PrimaryActionButton.BorderBrush = PrimaryActionButton.Background;
-            PrimaryActionButton.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(isLightTheme ? "#FAFAFA" : "#09090B"));
-            PrimaryActionButton.ToolTip = "클릭하여 출근 처리";
+            string? compactTime = isWorking ? snapshot.ClockInTimeText : snapshot.ClockOutTimeText;
+            if (!string.IsNullOrWhiteSpace(compactTime))
+            {
+                SubStatusText.Text = compactTime;
+                SubStatusText.Foreground = activeBrush;
+                SubStatusText.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                SubStatusText.Text = string.Empty;
+                SubStatusText.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        // 3. Shutdown / Power 아이콘 버튼 (출퇴근 액션)
+        if (_isAwaitingInlineConfirm)
+        {
+            System.Windows.Media.Color confirmColor = isWorking ? offWorkColor : workingColor;
+            PrimaryActionButton.Background = new SolidColorBrush(confirmColor);
+            PrimaryActionButton.Foreground = GetContrastingTextBrush(confirmColor);
+            PrimaryActionButton.ToolTip = isWorking ? "한 번 더 클릭: 퇴근 처리" : "한 번 더 클릭: 출근 처리";
+        }
+        else
+        {
+            PrimaryActionButton.Background = System.Windows.Media.Brushes.Transparent;
+            PrimaryActionButton.Foreground = new SolidColorBrush(iconFgColor);
+            PrimaryActionButton.ToolTip = snapshot.Status == WorkStatusKind.NeedsLogin
+                ? "로그인"
+                : (isWorking ? "퇴근하기" : "출근하기");
         }
 
         ImageSource dynamicIcon = _trayService.UpdateTrayAndWindowIcon(snapshot, activeStatusColor);
         Icon = dynamicIcon;
 
-        if (scaleChanged && IsLoaded)
+        if (IsLoaded)
         {
             UpdateLayout();
-            if (_snapService.CurrentSnap != null)
+            if (scaleChanged && _snapService.CurrentSnap != null)
             {
                 _snapService.EvaluateMagneticSnap(applyPosition: true);
             }
@@ -287,8 +287,7 @@ public partial class MainWindow : Window
             else
             {
                 SnapBadge.Visibility = Visibility.Visible;
-                SnapBadgeText.Text = snapInfo.TargetTitle;
-                SnapBadge.ToolTip = $"{snapInfo.TargetTitle} 경계에 스냅됨";
+                SnapBadge.ToolTip = "윈도우 경계 스냅됨";
             }
         });
     }
@@ -371,7 +370,6 @@ public partial class MainWindow : Window
     {
         if (_isMiniDotMode)
         {
-            InfoPanel.Visibility = Visibility.Visible;
             ActionPanel.Visibility = Visibility.Visible;
         }
     }
@@ -380,7 +378,6 @@ public partial class MainWindow : Window
     {
         if (_isMiniDotMode && !_isPointerDown)
         {
-            InfoPanel.Visibility = Visibility.Collapsed;
             ActionPanel.Visibility = Visibility.Collapsed;
         }
     }
@@ -388,16 +385,7 @@ public partial class MainWindow : Window
     private void ToggleMiniMode()
     {
         _isMiniDotMode = !_isMiniDotMode;
-        if (_isMiniDotMode)
-        {
-            InfoPanel.Visibility = Visibility.Collapsed;
-            ActionPanel.Visibility = Visibility.Collapsed;
-        }
-        else
-        {
-            InfoPanel.Visibility = Visibility.Visible;
-            ActionPanel.Visibility = Visibility.Visible;
-        }
+        ActionPanel.Visibility = _isMiniDotMode ? Visibility.Collapsed : Visibility.Visible;
 
         UpdateLayout();
         _snapService.EvaluateMagneticSnap(applyPosition: true);
@@ -428,12 +416,10 @@ public partial class MainWindow : Window
         }
 
         bool targetClockIn = snapshot.Status != WorkStatusKind.Working;
-        string actionName = targetClockIn ? "출근" : "퇴근";
 
         if (!_isAwaitingInlineConfirm)
         {
             _isAwaitingInlineConfirm = true;
-            SubStatusText.Text = $"한 번 더 누르면 {actionName} 처리";
             ApplySettingsAndVisuals();
             _confirmResetTimer.Stop();
             _confirmResetTimer.Start();
@@ -444,7 +430,7 @@ public partial class MainWindow : Window
         _isAwaitingInlineConfirm = false;
         _isActionBusy = true;
         PrimaryActionButton.IsEnabled = false;
-        SubStatusText.Text = $"{actionName} 요청 중...";
+        ApplySettingsAndVisuals();
 
         try
         {
@@ -452,11 +438,9 @@ public partial class MainWindow : Window
             if (success)
             {
                 _attendanceService.SetManualStatusOverride(targetClockIn ? WorkStatusKind.Working : WorkStatusKind.OffWork);
-                SubStatusText.Text = $"{actionName} 완료 ({DateTime.Now:HH:mm})";
             }
             else
             {
-                SubStatusText.Text = "포털 창에서 확인 필요";
                 OpenPortalWindow();
             }
         }
@@ -522,7 +506,6 @@ public partial class MainWindow : Window
 
     private async void OnRefreshClick(object sender, RoutedEventArgs e)
     {
-        SubStatusText.Text = "동기화 중...";
         await _attendanceService.RefreshStatusAsync();
     }
 
