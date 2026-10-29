@@ -47,6 +47,7 @@ public partial class SettingsWindow : Window
             ScaleValueText.Text = $"{(int)Math.Round(s.WidgetScale * 100)}%";
 
             AlwaysOnTopCheck.IsChecked = s.AlwaysOnTop;
+            ShowInTaskbarCheck.IsChecked = s.ShowInTaskbar;
             RunAtStartupCheck.IsChecked = s.RunAtStartup;
         }
         finally
@@ -77,7 +78,7 @@ public partial class SettingsWindow : Window
 
     private void OnWorkingSwatchClick(object sender, RoutedEventArgs e)
     {
-        if (sender is Button btn && btn.Tag is string hex)
+        if (sender is System.Windows.Controls.Button btn && btn.Tag is string hex)
         {
             WorkingHexBox.Text = hex;
         }
@@ -85,7 +86,7 @@ public partial class SettingsWindow : Window
 
     private void OnOffWorkSwatchClick(object sender, RoutedEventArgs e)
     {
-        if (sender is Button btn && btn.Tag is string hex)
+        if (sender is System.Windows.Controls.Button btn && btn.Tag is string hex)
         {
             OffWorkHexBox.Text = hex;
         }
@@ -97,7 +98,7 @@ public partial class SettingsWindow : Window
             return;
 
         string text = WorkingHexBox.Text.Trim();
-        if (AppSettingsService.TryParseColor(text, out Color c))
+        if (AppSettingsService.TryParseColor(text, out System.Windows.Media.Color c))
         {
             WorkingColorPreview.Fill = new SolidColorBrush(c);
             string normalized = text.StartsWith('#') ? text.ToUpperInvariant() : "#" + text.ToUpperInvariant();
@@ -111,7 +112,7 @@ public partial class SettingsWindow : Window
             return;
 
         string text = OffWorkHexBox.Text.Trim();
-        if (AppSettingsService.TryParseColor(text, out Color c))
+        if (AppSettingsService.TryParseColor(text, out System.Windows.Media.Color c))
         {
             OffWorkColorPreview.Fill = new SolidColorBrush(c);
             string normalized = text.StartsWith('#') ? text.ToUpperInvariant() : "#" + text.ToUpperInvariant();
@@ -141,7 +142,7 @@ public partial class SettingsWindow : Window
 
     private void OnQuickScaleClick(object sender, RoutedEventArgs e)
     {
-        if (sender is Button btn && btn.Tag is string tagStr &&
+        if (sender is System.Windows.Controls.Button btn && btn.Tag is string tagStr &&
             double.TryParse(tagStr, NumberStyles.Float, CultureInfo.InvariantCulture, out double scale))
         {
             ScaleSlider.Value = scale;
@@ -154,11 +155,13 @@ public partial class SettingsWindow : Window
             return;
 
         bool topMost = AlwaysOnTopCheck.IsChecked == true;
+        bool showTaskbar = ShowInTaskbarCheck.IsChecked == true;
         bool startup = RunAtStartupCheck.IsChecked == true;
 
         _settingsService.SaveAndApply(s =>
         {
             s.AlwaysOnTop = topMost;
+            s.ShowInTaskbar = showTaskbar;
             s.RunAtStartup = startup;
         });
     }

@@ -64,10 +64,11 @@ public sealed class DaouAttendanceService
         var env = await GetOrCreateEnvironmentAsync();
         await _hiddenWebView.EnsureCoreWebView2Async(env);
 
+        ConfigureWebViewPopupAndNavigationGuard(_hiddenWebView.CoreWebView2, autoRedirectToAttendance: true);
+
         _hiddenWebView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
         _hiddenWebView.CoreWebView2.WebResourceResponseReceived += OnWebResourceResponseReceived;
 
-        // 다우오피스 확인 alert/confirm 대화상자 자동 승인 처리 (출퇴근 버튼 클릭 시)
         _hiddenWebView.CoreWebView2.ScriptDialogOpening += (_, args) =>
         {
             args.Accept();
@@ -75,6 +76,100 @@ public sealed class DaouAttendanceService
 
         _isInitialized = true;
         _hiddenWebView.Source = new Uri(TargetAttendanceUrl);
+    }
+
+    /// <summary>
+    /// 다우오피스 로그인 직후 설문조사/공지 팝업(window.open 또는 강제 리다이렉트)이
+    /// 화면을 가로막는 현상을 방지하도록 WebView2에 가드를 설정합니다.
+    /// </summary>
+    public void ConfigureWebViewPopupAndNavigationGuard(CoreWebView2 coreWebView, bool autoRedirectToAttendance)
+    {
+        // 1. window.open 새 창 팝업(설문조사/공지 팝업)이 뜨면서 원래 창을 덮어쓰거나 가로막는 것 차단
+        coreWebView.NewWindowRequested += (_, e) =>
+        {
+            string targetUri = e.Uri ?? string.Empty;
+
+            // 설문조사(survey), 공지 팝업(popup/notice) 새 창은 즉시 무시
+            if (IsBlockingSurveyOrPopupUrl(targetUri))
+            {
+                e.Handled = true;
+                return;
+            }
+
+            // 그 외 유효한 근태/로그인 이동이면 새 창 대신 현재 창에서 이동
+            e.Handled = true;
+            if (!string.IsNullOrWhiteSpace(targetUri) && targetUri.Contains(BaseDomain, StringComparison.OrdinalIgnoreCase))
+            {
+                coreWebView.Navigate(targetUri);
+            }
+        };
+
+        // 2. 로그인 완료 후 설문조사(/app/survey)나 홈(/app/home) 등으로 납치될 경우 근태 페이지로 자동 복귀
+        coreWebView.SourceChanged += async (_, _) =>
+        {
+            string current = coreWebView.Source ?? string.Empty;
+            if (!autoRedirectToAttendance)
+                return;
+
+            if (IsRedirectedAwayFromAttendanceAfterLogin(current))
+            {
+                await Task.Delay(300);
+                coreWebView.Navigate(TargetAttendanceUrl);
+            }
+        };
+    }
+
+    public static bool IsBlockingSurveyOrPopupUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return true;
+
+        return url.Contains("/survey", StringComparison.OrdinalIgnoreCase) ||
+               url.Contains("popup", StringComparison.OrdinalIgnoreCase) ||
+               url.Contains("/notice", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsRedirectedAwayFromAttendanceAfterLogin(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return false;
+
+        if (IsLoginUrl(url))
+            return false;
+
+        // 이미 근태(ehr) 페이지에 있으면 정상
+        if (url.Contains("/ehr/", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // 로그인 후 설문조사(/app/survey), 대시보드(/app/home), 공지 게시판(/app/board) 등으로 튕긴 경우
+        if (url.Contains("/app/survey", StringComparison.OrdinalIgnoreCase) ||
+            url.Contains("/app/home", StringComparison.OrdinalIgnoreCase) ||
+            url.Contains("/app/board", StringComparison.OrdinalIgnoreCase) ||
+            url.EndsWith(".com/", StringComparison.OrdinalIgnoreCase) ||
+            url.EndsWith("/app", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 화면을 덮고 있는 다우오피스 설문조사/공지 레이어 팝업(.go_popup, .layer_normal, .dimmed 등)을 강제로 닫거나 제거합니다.
+    /// </summary>
+    public async Task<int> DismissBlockingPopupsAndSurveysAsync(CoreWebView2 webView)
+    {
+        try
+        {
+            string raw = await webView.ExecuteScriptAsync(GetDismissPopupsScript());
+            if (int.TryParse(raw, out int closedCount))
+                return closedCount;
+        }
+        catch
+        {
+            // Ignore script errors
+        }
+        return 0;
     }
 
     public async Task RefreshStatusAsync()
@@ -102,6 +197,7 @@ public sealed class DaouAttendanceService
             return;
         }
 
+        await DismissBlockingPopupsAndSurveysAsync(_hiddenWebView.CoreWebView2);
         await ProbeDomAndApiStatusAsync(_hiddenWebView.CoreWebView2);
     }
 
@@ -117,6 +213,14 @@ public sealed class DaouAttendanceService
         if (IsLoginUrl(currentUrl))
             return (false, "그룹웨어 로그인이 필요합니다. 로그인 창을 열어주세요.");
 
+        if (!currentUrl.Contains("/ehr/", StringComparison.OrdinalIgnoreCase))
+        {
+            _hiddenWebView.CoreWebView2.Navigate(TargetAttendanceUrl);
+            await Task.Delay(1500);
+        }
+
+        await DismissBlockingPopupsAndSurveysAsync(_hiddenWebView.CoreWebView2);
+
         string script = clockIn ? GetClockInTriggerScript() : GetClockOutTriggerScript();
 
         try
@@ -126,7 +230,6 @@ public sealed class DaouAttendanceService
 
             if (result.StartsWith("OK:", StringComparison.Ordinal))
             {
-                // 클릭 후 모달 확인 버튼이 뜰 수 있으므로 500ms 후 확인 버튼 자동 클릭 및 상태 재조회
                 await Task.Delay(600);
                 await _hiddenWebView.CoreWebView2.ExecuteScriptAsync(GetConfirmModalClickScript());
                 await Task.Delay(900);
@@ -189,8 +292,14 @@ public sealed class DaouAttendanceService
             return;
         }
 
-        // SPA 렌더링 대기 후 DOM/API 상태 추출
-        await Task.Delay(1200);
+        if (IsRedirectedAwayFromAttendanceAfterLogin(url))
+        {
+            _hiddenWebView.CoreWebView2.Navigate(TargetAttendanceUrl);
+            return;
+        }
+
+        await Task.Delay(1000);
+        await DismissBlockingPopupsAndSurveysAsync(_hiddenWebView.CoreWebView2);
         await ProbeDomAndApiStatusAsync(_hiddenWebView.CoreWebView2);
     }
 
@@ -296,7 +405,7 @@ public sealed class DaouAttendanceService
         }
         catch
         {
-            // Ignore transient script failures during navigation
+            // Ignore transient script failures
         }
     }
 
@@ -306,7 +415,7 @@ public sealed class DaouAttendanceService
         SnapshotChanged?.Invoke(next);
     }
 
-    private static bool IsLoginUrl(string url)
+    public static bool IsLoginUrl(string url)
     {
         if (string.IsNullOrWhiteSpace(url))
             return false;
@@ -316,13 +425,54 @@ public sealed class DaouAttendanceService
     }
 
     /// <summary>
-    /// 다우오피스 근태현황(EHR) 페이지의 DOM 및 표시 텍스트를 정밀 분석하여
-    /// 출근 시각, 퇴근 시각, 현재 근무중/퇴근 여부를 JSON으로 반환하는 스크립트입니다.
+    /// 다우오피스 내 설문조사·공지사항 모달 팝업 레이어를 닫거나 DOM에서 제거하는 스크립트입니다.
     /// </summary>
+    private static string GetDismissPopupsScript() => """
+        (() => {
+            let count = 0;
+            const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+            // 1. 닫기 버튼이나 '오늘 하루 열지 않음', '다음에 하기', '닫기' 버튼 클릭
+            const closeBtnSelectors = [
+                '.go_popup .btn_layer_x',
+                '.go_popup a.btn_minor_s',
+                '.layer_normal .btn_layer_x',
+                '.layer_notice .btn_layer_x',
+                '[data-role="layerClose"]',
+                '.btn_popup_close',
+                '.survey_popup .close'
+            ];
+            for (const sel of closeBtnSelectors) {
+                document.querySelectorAll(sel).forEach(el => {
+                    try { el.click(); count++; } catch {}
+                });
+            }
+
+            // 2. 팝업 컨테이너 내부의 '닫기' / '취소' / '나중에' 버튼 탐색 후 클릭 및 레이어 제거
+            const popupContainers = document.querySelectorAll(
+                '.go_popup, .layer_normal, .layer_notice, .layer_survey, #popOverlay, .overlay, .dimmed, [id*="popup"], [class*="popup_layer"]'
+            );
+            popupContainers.forEach(popup => {
+                const txt = clean(popup.innerText);
+                // 출/퇴근 확인 팝업이 아닌 설문/공지 팝업이거나 딤드 배경인 경우 제거
+                if (!txt.includes('출근') && !txt.includes('퇴근')) {
+                    popup.remove();
+                    count++;
+                }
+            });
+
+            // 3. body 스크롤 잠금 해제
+            if (document.body) {
+                document.body.style.overflow = 'auto';
+                document.body.classList.remove('modal-open', 'scroll_lock');
+            }
+            return count;
+        })();
+        """;
+
     private static string GetAttendanceProbeScript() => """
         (() => {
             const url = location.href.toLowerCase();
-            const bodyText = (document.body ? document.body.innerText : '') || '';
 
             if (url.includes('/login') || document.querySelector('input[type="password"]')) {
                 return JSON.stringify({ isLoginPage: true });
@@ -330,13 +480,11 @@ public sealed class DaouAttendanceService
 
             const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
 
-            // 1. 출근/퇴근 시간 추출 정규식 및 셀렉터
             let clockIn = null;
             let clockOut = null;
             let duration = null;
             let badgeText = null;
 
-            // 다우오피스 타임라인 출퇴근 시간 영역 탐색
             const allElements = Array.from(document.querySelectorAll('li, div, dl, tr, span, p'));
             for (const el of allElements) {
                 const txt = clean(el.innerText);
@@ -352,7 +500,6 @@ public sealed class DaouAttendanceService
                 }
             }
 
-            // ID/Class 기반 보조 탐색 (DaouOffice EHR 표준 셀렉터)
             const workInEl = document.querySelector('#workInTime, .work_in_time, [data-role="clockInTime"], .clock-in-time');
             if (workInEl) {
                 const m = clean(workInEl.innerText).match(/(\d{2}:\d{2}(:\d{2})?)/);
@@ -364,7 +511,6 @@ public sealed class DaouAttendanceService
                 if (m) clockOut = m[1];
             }
 
-            // 상태 배지 탐색 ("근무중", "업무중", "업무종료", "퇴근", "출근전")
             const statusCandidates = Array.from(document.querySelectorAll('.state, .status, .badge, .chip, .label, .txt_state, [class*="status"], [class*="state"]'));
             for (const el of statusCandidates) {
                 const t = clean(el.innerText);
@@ -377,7 +523,6 @@ public sealed class DaouAttendanceService
                 }
             }
 
-            // 버튼 활성/비활성 상태 확인
             const buttons = Array.from(document.querySelectorAll('button, a.btn, [role="button"], span.btn_major, span.btn_minor'));
             let clockInBtnDisabled = false;
             let clockOutBtnActive = false;
@@ -395,10 +540,6 @@ public sealed class DaouAttendanceService
                 }
             }
 
-            // 종합 판정:
-            // 1) 배지가 명시적으로 '근무중'/'업무중'이거나
-            // 2) 출근 시각(clockIn)이 찍혀 있고 퇴근 시각(clockOut)이 아직 없거나 ('--:--' / 미기록)
-            // 3) 출근 버튼은 비활성화되어 있고 퇴근 버튼이 활성화되어 있으면 -> WORKING (근무중)
             let state = 'OFF_WORK';
 
             const hasValidClockIn = clockIn && !clockIn.startsWith('00:00') && !clockIn.includes('--');

@@ -24,6 +24,7 @@ public sealed class AppSettings
     public double WidgetOpacity { get; set; } = 0.95;        // 0.25 ~ 1.0
     public double WidgetScale { get; set; } = 1.0;           // 0.70 ~ 1.60
     public bool AlwaysOnTop { get; set; } = true;
+    public bool ShowInTaskbar { get; set; } = true;          // 작업표시줄 아이콘 표시 여부
     public bool RunAtStartup { get; set; } = false;
 }
 
@@ -44,7 +45,7 @@ public sealed class AppSettingsService : IDisposable
         get
         {
             var ver = Assembly.GetExecutingAssembly().GetName().Version;
-            return ver != null ? $"v{ver.Major}.{ver.Minor}.{ver.Build}" : "v1.1.0";
+            return ver != null ? $"v{ver.Major}.{ver.Minor}.{ver.Build}" : "v1.2.0";
         }
     }
 
@@ -79,7 +80,6 @@ public sealed class AppSettingsService : IDisposable
             Current = new AppSettings();
         }
 
-        // 실제 레지스트리의 자동 실행 상태와 동기화
         Current.RunAtStartup = IsStartupRegistered();
     }
 
@@ -109,9 +109,6 @@ public sealed class AppSettingsService : IDisposable
         SaveAndApply();
     }
 
-    /// <summary>
-    /// 현재 설정(System/Dark/Light)과 Windows OS 테마 설정을 종합하여 라이트 테마 여부를 반환합니다.
-    /// </summary>
     public bool IsEffectiveLightTheme()
     {
         return Current.ThemeMode switch
@@ -140,7 +137,7 @@ public sealed class AppSettingsService : IDisposable
         return false;
     }
 
-    public static Color ParseColorOrDefault(string? hex, string fallbackHex)
+    public static System.Windows.Media.Color ParseColorOrDefault(string? hex, string fallbackHex)
     {
         if (!string.IsNullOrWhiteSpace(hex))
         {
@@ -150,7 +147,7 @@ public sealed class AppSettingsService : IDisposable
                 if (!candidate.StartsWith('#'))
                     candidate = "#" + candidate;
 
-                if (ColorConverter.ConvertFromString(candidate) is Color c)
+                if (System.Windows.Media.ColorConverter.ConvertFromString(candidate) is System.Windows.Media.Color c)
                     return c;
             }
             catch
@@ -159,10 +156,10 @@ public sealed class AppSettingsService : IDisposable
             }
         }
 
-        return (Color)ColorConverter.ConvertFromString(fallbackHex);
+        return (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(fallbackHex);
     }
 
-    public static bool TryParseColor(string? hex, out Color color)
+    public static bool TryParseColor(string? hex, out System.Windows.Media.Color color)
     {
         color = default;
         if (string.IsNullOrWhiteSpace(hex))
@@ -174,7 +171,7 @@ public sealed class AppSettingsService : IDisposable
             if (!candidate.StartsWith('#'))
                 candidate = "#" + candidate;
 
-            if (ColorConverter.ConvertFromString(candidate) is Color c)
+            if (System.Windows.Media.ColorConverter.ConvertFromString(candidate) is System.Windows.Media.Color c)
             {
                 color = c;
                 return true;

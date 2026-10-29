@@ -8,8 +8,24 @@
         AllowsTransparency="True"
         Background="Transparent"
         Topmost="True"
-        ShowInTaskbar="False"
+        ShowInTaskbar="True"
         ResizeMode="NoResize">
+
+    <Window.TaskbarItemInfo>
+        <TaskbarItemInfo x:Name="WindowTaskbarInfo" Description="WorkDot · 다우오피스 근태 오버레이">
+            <TaskbarItemInfo.ThumbButtonInfos>
+                <ThumbButtonInfo x:Name="ThumbClockActionBtn"
+                                 Description="출근 / 퇴근 처리"
+                                 Click="OnThumbClockActionClick"/>
+                <ThumbButtonInfo Description="다우오피스 근태/로그인 창 열기"
+                                 Click="OnThumbOpenPortalClick"/>
+                <ThumbButtonInfo Description="지금 상태 새로고침"
+                                 Click="OnThumbRefreshClick"/>
+                <ThumbButtonInfo Description="WorkDot 환경설정 열기"
+                                 Click="OnThumbSettingsClick"/>
+            </TaskbarItemInfo.ThumbButtonInfos>
+        </TaskbarItemInfo>
+    </Window.TaskbarItemInfo>
 
     <Window.Resources>
         <!-- 숨쉬는 상태 LED 펄스 애니메이션 -->
@@ -101,13 +117,14 @@
 
         <Grid.ContextMenu>
             <ContextMenu Opened="OnContextMenuOpened">
-                <MenuItem x:Name="MenuVersionHeader" Header="✨ WorkDot v1.1.0" IsEnabled="False" FontWeight="Bold"/>
+                <MenuItem x:Name="MenuVersionHeader" Header="✨ WorkDot v1.2.0" IsEnabled="False" FontWeight="Bold"/>
                 <Separator/>
                 <MenuItem Header="⚙️ 환경설정 (테마·색상·투명도·크기)..." Click="OnOpenSettingsClick" FontWeight="SemiBold"/>
                 <MenuItem Header="🌐 다우오피스 근태 창 열기 (로그인/상세)" Click="OnOpenPortalClick"/>
                 <MenuItem Header="🔄 지금 상태 새로고침" Click="OnRefreshClick"/>
                 <Separator/>
                 <MenuItem x:Name="MenuAlwaysOnTop" Header="📌 항상 위에 표시 (Topmost)" IsCheckable="True" Click="OnMenuAlwaysOnTopClick"/>
+                <MenuItem x:Name="MenuShowInTaskbar" Header="🪟 작업 표시줄에 앱 아이콘 표시" IsCheckable="True" Click="OnMenuShowInTaskbarClick"/>
                 <MenuItem x:Name="MenuRunAtStartup" Header="🚀 Windows 시작 시 자동 실행" IsCheckable="True" Click="OnMenuRunAtStartupClick"/>
                 <MenuItem Header="📐 위젯 크기 빠른 변경">
                     <MenuItem Header="작게 (80%)" Tag="0.8" Click="OnMenuQuickScaleClick"/>
@@ -121,6 +138,7 @@
                 <Separator/>
                 <MenuItem Header="🧲 작업 표시줄 위로 스냅 이동" Click="OnSnapToTaskbarClick"/>
                 <MenuItem Header="✨ 컴팩트/미니 점(Dot) 모드 전환 (더블클릭)" Click="OnToggleMiniModeClick"/>
+                <MenuItem Header="👁️ 위젯 잠시 숨기기 (트레이 아이콘 클릭 시 복귀)" Click="OnHideOverlayClick"/>
                 <Separator/>
                 <MenuItem Header="❌ WorkDot 종료" Click="OnExitClick"/>
             </ContextMenu>
@@ -215,7 +233,7 @@
                                    Foreground="#94A3B8"
                                    FontSize="11"/>
                         <TextBlock x:Name="InlineVersionText"
-                                   Text=" · v1.1.0"
+                                   Text=" · v1.2.0"
                                    Foreground="#64748B"
                                    FontSize="10"
                                    VerticalAlignment="Bottom"
@@ -225,7 +243,7 @@
 
                 <!-- 3. 원클릭 직관적 출근/퇴근 액션 & 설정 버튼 영역 -->
                 <StackPanel x:Name="ActionPanel" Orientation="Horizontal" VerticalAlignment="Center">
-                    <!-- 주 액션 버튼: 퇴근 상태일 땐 [출근하기], 근무중일 땐 [퇴근하기] -->
+                    <!-- 주 액션 버튼 -->
                     <Button x:Name="PrimaryActionButton"
                             Style="{StaticResource PillActionButtonStyle}"
                             Content="출근하기"

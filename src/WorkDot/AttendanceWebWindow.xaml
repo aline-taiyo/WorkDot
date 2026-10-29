@@ -3,36 +3,65 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         Title="WorkDot · 다우오피스 근태관리"
-        Width="1060" Height="760"
+        Width="1120" Height="780"
         WindowStartupLocation="CenterScreen"
         Background="#0F172A">
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="46"/>
+            <RowDefinition Height="50"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- 상단 툴바 -->
-        <Border Grid.Row="0" Background="#1E293B" BorderBrush="#334155" BorderThickness="0,0,0,1" Padding="14,0">
+        <!-- 상단 네비게이션 & 설문/팝업 제어 툴바 -->
+        <Border Grid.Row="0" Background="#1E293B" BorderBrush="#334155" BorderThickness="0,0,0,1" Padding="12,0">
             <DockPanel LastChildFill="True">
+                <!-- 좌측: 뒤로 / 새로고침 / 타이틀 -->
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" VerticalAlignment="Center">
-                    <Ellipse Width="10" Height="10" Fill="#10B981" Margin="0,0,8,0"/>
-                    <TextBlock Text="다우오피스 근태 현황 (로그인 시 자동 동기화)"
-                               Foreground="#F8FAFC" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center"/>
-                </StackPanel>
-
-                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
-                    <Button Content="근태 페이지로 이동" Click="OnGoHomeClick"
+                    <Button Content="◀" Click="OnBackClick" ToolTip="뒤로 가기"
                             Background="#334155" Foreground="#E2E8F0" BorderThickness="0"
-                            Padding="10,5" Margin="0,0,8,0" Cursor="Hand"/>
-                    <Button Content="상태 동기화 및 닫기" Click="OnSyncAndCloseClick"
-                            Background="#10B981" Foreground="#062E22" FontWeight="Bold" BorderThickness="0"
-                            Padding="12,5" Cursor="Hand"/>
+                            Width="28" Height="28" Margin="0,0,4,0" Cursor="Hand"/>
+                    <Button Content="↻" Click="OnReloadClick" ToolTip="새로고침"
+                            Background="#334155" Foreground="#E2E8F0" BorderThickness="0"
+                            Width="28" Height="28" Margin="0,0,10,0" Cursor="Hand"/>
+
+                    <Ellipse Width="10" Height="10" Fill="#10B981" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="다우오피스 근태"
+                               Foreground="#F8FAFC" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
                 </StackPanel>
 
-                <TextBlock x:Name="UrlText" Text="https://alinestudio.daouoffice.com/ehr/app/attend/my-attendance-status"
-                           Foreground="#94A3B8" FontSize="11.5" VerticalAlignment="Center" Margin="16,0"
-                           TextTrimming="CharacterEllipsis"/>
+                <!-- 우측: 설문/팝업 강제 닫기 & 근태 페이지 강제 이동 & 완료 -->
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+                    <CheckBox x:Name="AutoBypassSurveyCheck"
+                              Content="설문/팝업 자동 건너뛰기"
+                              IsChecked="True"
+                              Foreground="#CBD5E1"
+                              FontSize="11.5"
+                              VerticalAlignment="Center"
+                              Margin="0,0,10,0"/>
+
+                    <Button Content="🚫 설문/팝업 닫기" Click="OnDismissPopupsClick"
+                            ToolTip="화면을 가리는 설문조사·공지사항 레이어 팝업을 강제로 닫고 근태 페이지로 이동합니다"
+                            Background="#F59E0B" Foreground="#1E293B" FontWeight="Bold" BorderThickness="0"
+                            Padding="10,6" Margin="0,0,6,0" Cursor="Hand"/>
+
+                    <Button Content="🏠 근태현황 바로가기" Click="OnGoHomeClick"
+                            ToolTip="https://alinestudio.daouoffice.com/ehr/app/attend/my-attendance-status 로 즉시 이동"
+                            Background="#3B82F6" Foreground="#FFFFFF" FontWeight="SemiBold" BorderThickness="0"
+                            Padding="10,6" Margin="0,0,6,0" Cursor="Hand"/>
+
+                    <Button Content="✓ 동기화 후 닫기" Click="OnSyncAndCloseClick"
+                            Background="#10B981" Foreground="#042F2E" FontWeight="Bold" BorderThickness="0"
+                            Padding="12,6" Cursor="Hand"/>
+                </StackPanel>
+
+                <!-- 중앙: 현재 URL 표시 -->
+                <Border Background="#0F172A" BorderBrush="#334155" BorderThickness="1" CornerRadius="6"
+                        Margin="10,9" Padding="8,0" VerticalAlignment="Stretch">
+                    <TextBlock x:Name="UrlText"
+                               Text="https://alinestudio.daouoffice.com/ehr/app/attend/my-attendance-status"
+                               Foreground="#94A3B8" FontSize="11.5" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"/>
+                </Border>
             </DockPanel>
         </Border>
 
