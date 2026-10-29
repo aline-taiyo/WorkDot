@@ -40,7 +40,7 @@
     </Window.Resources>
 
     <Grid x:Name="RootContainer"
-          Margin="14"
+          Margin="6"
           MouseLeftButtonDown="OnOverlayMouseLeftButtonDown"
           MouseMove="OnOverlayMouseMove"
           MouseLeftButtonUp="OnOverlayMouseLeftButtonUp"
@@ -88,8 +88,8 @@
             </Border.LayoutTransform>
             <Border.Effect>
                 <DropShadowEffect Color="#000000"
-                                  BlurRadius="16"
-                                  ShadowDepth="4"
+                                  BlurRadius="8"
+                                  ShadowDepth="1"
                                   Opacity="0.45"/>
             </Border.Effect>
 

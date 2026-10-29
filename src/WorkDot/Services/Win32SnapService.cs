@@ -34,8 +34,8 @@ public sealed class SnapTargetInfo
 /// </summary>
 public sealed class Win32SnapService : IDisposable
 {
-    private const int SnapThresholdPx = 22;
-    private const int ShadowInsetDip = 8; // RootContainer Margin(14) 중 화면 테두리 여백 보정치
+    private const int SnapThresholdPx = 24;
+    private const int ShadowInsetDip = 6; // RootContainer Margin(6)과 동일하게 맞춰 경계에 0px 밀착 스냅
     private const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
 
     private readonly Window _overlayWindow;
