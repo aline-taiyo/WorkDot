@@ -16,6 +16,12 @@ public partial class AttendanceWebWindow : Window
         InitializeComponent();
         _attendanceService = attendanceService;
         Closing += OnWindowClosing;
+        IsVisibleChanged += (_, _) =>
+        {
+            // 창이 숨겨지면(닫기·동기화 후 닫기 등) 백그라운드 동기화 모드로 돌아간다
+            if (!IsVisible)
+                _attendanceService.IsInteractiveBrowsing = false;
+        };
     }
 
     public async Task InitializeInBackgroundAsync()
@@ -58,6 +64,7 @@ public partial class AttendanceWebWindow : Window
 
         Show();
         Activate();
+        _attendanceService.IsInteractiveBrowsing = true;
     }
 
     public void ShutdownClose()
@@ -100,6 +107,13 @@ public partial class AttendanceWebWindow : Window
             return;
 
         e.Cancel = true;
+        HideToBackground();
+    }
+
+    /// <summary>창을 숨기고 백그라운드 동기화로 전환한다 (다른 메뉴를 보고 있었다면 근태 페이지로 복귀)</summary>
+    private void HideToBackground()
+    {
+        _attendanceService.IsInteractiveBrowsing = false;
         Hide();
         _ = _attendanceService.RefreshStatusAsync();
     }
@@ -124,12 +138,9 @@ public partial class AttendanceWebWindow : Window
 
         await _attendanceService.DismissBlockingPopupsAndSurveysAsync(PortalWebView.CoreWebView2);
 
+        // 팝업만 닫고 현재 보고 있는 페이지는 유지한다 (근태 페이지 이동은 '근태 홈' 버튼으로)
         string current = PortalWebView.CoreWebView2.Source ?? string.Empty;
-        if (!current.Contains("/ehr/app/attend", StringComparison.OrdinalIgnoreCase))
-        {
-            PortalWebView.CoreWebView2.Navigate(DaouAttendanceService.TargetAttendanceUrl);
-        }
-        else
+        if (current.Contains("/ehr/app/attend", StringComparison.OrdinalIgnoreCase))
         {
             await _attendanceService.ProbeDomAndApiStatusAsync(PortalWebView.CoreWebView2);
         }
@@ -146,6 +157,6 @@ public partial class AttendanceWebWindow : Window
         {
             await _attendanceService.ProbeDomAndApiStatusAsync(PortalWebView.CoreWebView2);
         }
-        Hide();
+        HideToBackground();
     }
 }

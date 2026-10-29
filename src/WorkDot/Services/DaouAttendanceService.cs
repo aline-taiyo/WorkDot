@@ -146,6 +146,15 @@ public sealed class DaouAttendanceService
     private DateTime _userBreaksDate = DateTime.Today;
     private readonly List<BreakTimeWindow> _userBreakWindowsToday = new();
 
+    // 로그인 직후 다우오피스가 홈(/app/home 등)으로 보내는 경우에만 근태 페이지로 1회 되돌리기 위한 플래그
+    private bool _pendingAttendanceRedirect = true;
+
+    /// <summary>
+    /// 사용자가 브라우저 창을 열어 직접 탐색 중인지 여부.
+    /// true 인 동안에는 자동으로 근태 페이지로 되돌리지 않는다 (로그인 직후 1회 제외).
+    /// </summary>
+    public bool IsInteractiveBrowsing { get; set; }
+
     public AttendanceSnapshot CurrentSnapshot { get; private set; } = new(
         WorkStatusKind.OffWork,
         "퇴근 (연동 대기)",
@@ -226,7 +235,9 @@ public sealed class DaouAttendanceService
             string targetUri = e.Uri ?? string.Empty;
             e.Handled = true;
 
-            if (IsBlockingSurveyOrPopupUrl(targetUri))
+            // 백그라운드 동기화 중에만 설문/공지 팝업을 차단한다.
+            // 사용자가 브라우저 창에서 직접 탐색 중이면 결재 문서·공지 등 새 창 링크도 같은 창에서 연다.
+            if (!IsInteractiveBrowsing && IsBlockingSurveyOrPopupUrl(targetUri))
                 return;
 
             if (!string.IsNullOrWhiteSpace(targetUri) &&
@@ -244,8 +255,15 @@ public sealed class DaouAttendanceService
         coreWebView.SourceChanged += async (_, _) =>
         {
             string current = coreWebView.Source ?? string.Empty;
-            if (IsRedirectedAwayFromAttendanceAfterLogin(current))
+            if (IsLoginUrl(current))
             {
+                _pendingAttendanceRedirect = true;
+                return;
+            }
+
+            if (ShouldReturnToAttendance(current))
+            {
+                _pendingAttendanceRedirect = false;
                 await Task.Delay(250);
                 coreWebView.Navigate(TargetAttendanceUrl);
             }
@@ -275,11 +293,15 @@ public sealed class DaouAttendanceService
             // 로그인 성공 상태이므로 세션 쿠키(GOSSOcookie 등)를 영구 쿠키로 승격 및 백업 저장!
             await PersistSessionCookiesAsync(coreWebView);
 
-            if (IsRedirectedAwayFromAttendanceAfterLogin(url))
+            if (ShouldReturnToAttendance(url))
             {
+                _pendingAttendanceRedirect = false;
                 coreWebView.Navigate(TargetAttendanceUrl);
                 return;
             }
+
+            // 로그인 후 첫 페이지 로드가 끝났으므로 이후의 이동은 사용자 탐색으로 본다
+            _pendingAttendanceRedirect = false;
 
             int[] delays = [500, 1000, 1500];
             foreach (int delay in delays)
@@ -574,6 +596,19 @@ public sealed class DaouAttendanceService
         return false;
     }
 
+    /// <summary>
+    /// 근태 페이지로 자동 복귀할지 판단한다.
+    /// 백그라운드 동기화 중이거나 로그인 직후 홈으로 보내진 경우에만 복귀하고,
+    /// 사용자가 브라우저 창에서 다른 메뉴로 이동한 경우에는 그대로 둔다.
+    /// </summary>
+    private bool ShouldReturnToAttendance(string url)
+    {
+        if (!IsRedirectedAwayFromAttendanceAfterLogin(url))
+            return false;
+
+        return _pendingAttendanceRedirect || !IsInteractiveBrowsing;
+    }
+
     public async Task<int> DismissBlockingPopupsAndSurveysAsync(CoreWebView2 webView)
     {
         try
@@ -595,8 +630,15 @@ public sealed class DaouAttendanceService
             return;
 
         string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
-        if (IsLoginUrl(currentUrl) || !currentUrl.Contains("/ehr/", StringComparison.OrdinalIgnoreCase))
+        bool isOnEhrPage = !IsLoginUrl(currentUrl) &&
+                           currentUrl.Contains("/ehr/", StringComparison.OrdinalIgnoreCase);
+        if (!isOnEhrPage)
         {
+            // 사용자가 브라우저 창에서 다른 메뉴를 보거나 로그인 입력 중이면 주기 동기화가 페이지를 빼앗지 않는다.
+            // 창을 닫으면(숨기면) 다음 동기화에서 근태 페이지로 돌아간다.
+            if (IsInteractiveBrowsing)
+                return;
+
             _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
             return;
         }
