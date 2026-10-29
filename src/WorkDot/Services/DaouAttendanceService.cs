@@ -111,6 +111,12 @@ public sealed class DaouAttendanceService
             }
         };
 
+        // 다우오피스 로고/리소스가 작업 폴더에 자동 다운로드되는 현상 차단
+        coreWebView.DownloadStarting += (_, e) =>
+        {
+            e.Cancel = true;
+        };
+
         coreWebView.SourceChanged += async (_, _) =>
         {
             string current = coreWebView.Source ?? string.Empty;
