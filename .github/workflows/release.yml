@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release tag (e.g. v1.5.5)'
+        description: 'Release tag (e.g. v1.5.7)'
         required: true
-        default: 'v1.5.5'
+        default: 'v1.5.7'
 
 permissions:
   contents: write
@@ -36,7 +36,7 @@ jobs:
         run: |
           $tag = "${{ github.event.inputs.tag_name || github.ref_name }}"
           $ver = $tag.TrimStart('v', 'V')
-          if (-not $ver) { $ver = "1.5.5" }
+          if (-not $ver) { $ver = "1.5.7" }
           dotnet publish src/WorkDot/WorkDot.csproj -c Release -r win-x64 --self-contained false -o dist/publish
           wix build installer/WorkDot.wxs -arch x64 -d ProductVersion="$ver" -o "dist/WorkDot-Setup-win-x64.msi"
 

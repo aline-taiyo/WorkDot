@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 for /f "usebackq delims=" %%v in (`powershell -NoProfile -Command "$xml = [xml](Get-Content 'src\WorkDot\WorkDot.csproj'); $xml.Project.PropertyGroup.Version"`) do set "VER=%%v"
-if "%VER%"=="" set "VER=1.5.5"
+if "%VER%"=="" set "VER=1.5.7"
 
 set "TAG=%~1"
 if "%TAG%"=="" set "TAG=v%VER%"

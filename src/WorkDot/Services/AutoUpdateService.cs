@@ -25,9 +25,12 @@ public sealed class AutoUpdateService : IDisposable
 {
     public const string GitHubRepoUrl = "https://github.com/aline-taiyo/WorkDot";
     public const string GitHubReleasesUrl = "https://github.com/aline-taiyo/WorkDot/releases";
+    private const string LatestReleaseWebUrl = "https://github.com/aline-taiyo/WorkDot/releases/latest";
     private const string LatestReleaseApiUrl = "https://api.github.com/repos/aline-taiyo/WorkDot/releases/latest";
+    private const string DefaultMsiAssetName = "WorkDot-Setup-win-x64.msi";
 
-    private static readonly HttpClient Http = CreateHttpClient();
+    private static readonly HttpClient Http = CreateHttpClient(allowAutoRedirect: true);
+    private static readonly HttpClient NoRedirectHttp = CreateHttpClient(allowAutoRedirect: false);
 
     private readonly AppSettingsService _settingsService;
     private readonly DispatcherTimer _periodicTimer;
@@ -96,59 +99,17 @@ public sealed class AutoUpdateService : IDisposable
         try
         {
             UpdateStatus("GitHub 릴리스 확인 중...");
-            using var response = await Http.GetAsync(LatestReleaseApiUrl);
-            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+
+            // 1차: GitHub 웹 리다이렉트(/releases/latest -> /releases/tag/vX.Y.Z)로 확인 (REST API 60회/시간 Rate Limit 우회)
+            var webResult = await TryCheckViaWebRedirectAsync(currentTag, currentVer);
+            if (webResult != null)
             {
-                string msg = $"현재 최신 버전 ({currentTag}) · 배포된 릴리스 없음";
-                UpdateStatus(msg);
-                return new UpdateCheckResult(false, currentTag, currentTag, null, null, msg);
+                UpdateStatus(webResult.Message);
+                return webResult;
             }
 
-            response.EnsureSuccessStatusCode();
-            string json = await response.Content.ReadAsStringAsync();
-
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            string tagName = root.TryGetProperty("tag_name", out var tagProp) ? (tagProp.GetString() ?? currentTag) : currentTag;
-            Version? latestVer = ParseVersionFromTag(tagName);
-
-            string? downloadUrl = null;
-            string? assetName = null;
-
-            if (root.TryGetProperty("assets", out var assetsProp) && assetsProp.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var asset in assetsProp.EnumerateArray())
-                {
-                    string? name = asset.TryGetProperty("name", out var nProp) ? nProp.GetString() : null;
-                    string? url = asset.TryGetProperty("browser_download_url", out var uProp) ? uProp.GetString() : null;
-                    if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(url))
-                        continue;
-
-                    if (name.EndsWith(".msi", StringComparison.OrdinalIgnoreCase) ||
-                        name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
-                        name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-                    {
-                        assetName = name;
-                        downloadUrl = url;
-                        if (name.EndsWith(".msi", StringComparison.OrdinalIgnoreCase))
-                            break; // msi 설치 패키지 최우선
-                    }
-                }
-            }
-
-            if (latestVer != null && IsNewerVersion(latestVer, currentVer))
-            {
-                string msg = downloadUrl != null
-                    ? $"새 버전 발견: {tagName} (현재 {currentTag})"
-                    : $"새 태그 {tagName} 발견 (릴리스 첨부 파일 없음)";
-                UpdateStatus(msg);
-                return new UpdateCheckResult(true, currentTag, tagName, downloadUrl, assetName, msg);
-            }
-
-            string upToDateMsg = $"최신 버전 사용 중 ({currentTag})";
-            UpdateStatus(upToDateMsg);
-            return new UpdateCheckResult(false, currentTag, tagName, null, null, upToDateMsg);
+            // 2차 폴백: GitHub REST API
+            return await CheckViaRestApiAsync(currentTag, currentVer);
         }
         catch (Exception ex)
         {
@@ -156,6 +117,151 @@ public sealed class AutoUpdateService : IDisposable
             UpdateStatus(errMsg);
             return new UpdateCheckResult(false, currentTag, currentTag, null, null, errMsg);
         }
+    }
+
+    private async Task<UpdateCheckResult?> TryCheckViaWebRedirectAsync(string currentTag, Version currentVer)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, LatestReleaseWebUrl);
+            using var resp = await NoRedirectHttp.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+
+            if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                string msg = $"현재 최신 버전 ({currentTag}) · 배포된 릴리스 없음";
+                return new UpdateCheckResult(false, currentTag, currentTag, null, null, msg);
+            }
+
+            string? location = resp.Headers.Location?.OriginalString;
+            if (string.IsNullOrWhiteSpace(location))
+                return null;
+
+            const string tagMarker = "/releases/tag/";
+            int idx = location.IndexOf(tagMarker, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0)
+            {
+                if (location.EndsWith("/releases", StringComparison.OrdinalIgnoreCase))
+                {
+                    string noRelMsg = $"현재 최신 버전 ({currentTag}) · 배포된 릴리스 없음";
+                    return new UpdateCheckResult(false, currentTag, currentTag, null, null, noRelMsg);
+                }
+                return null;
+            }
+
+            string tagName = Uri.UnescapeDataString(location[(idx + tagMarker.Length)..].Trim('/'));
+            if (string.IsNullOrWhiteSpace(tagName))
+                return null;
+
+            Version? latestVer = ParseVersionFromTag(tagName);
+            if (latestVer != null && IsNewerVersion(latestVer, currentVer))
+            {
+                string msiUrl = $"{GitHubReleasesUrl}/download/{tagName}/{DefaultMsiAssetName}";
+                if (await CheckAssetExistsAsync(msiUrl))
+                {
+                    string msg = $"새 버전 발견: {tagName} (현재 {currentTag})";
+                    return new UpdateCheckResult(true, currentTag, tagName, msiUrl, DefaultMsiAssetName, msg);
+                }
+
+                // MSI 파일명이 다르거나 빌드 중인 경우 REST API 폴백 시도
+                var apiResult = await TryCheckViaRestApiSilentAsync(currentTag, currentVer);
+                if (apiResult != null)
+                    return apiResult;
+
+                string noAssetMsg = $"새 태그 {tagName} 발견 (릴리스 첨부 파일 없음)";
+                return new UpdateCheckResult(true, currentTag, tagName, null, null, noAssetMsg);
+            }
+
+            string upToDateMsg = $"최신 버전 사용 중 ({currentTag})";
+            return new UpdateCheckResult(false, currentTag, tagName, null, null, upToDateMsg);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static async Task<bool> CheckAssetExistsAsync(string assetUrl)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Head, assetUrl);
+            using var resp = await NoRedirectHttp.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+            int code = (int)resp.StatusCode;
+            return (code >= 200 && code < 400);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task<UpdateCheckResult?> TryCheckViaRestApiSilentAsync(string currentTag, Version currentVer)
+    {
+        try
+        {
+            return await CheckViaRestApiAsync(currentTag, currentVer);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task<UpdateCheckResult> CheckViaRestApiAsync(string currentTag, Version currentVer)
+    {
+        using var response = await Http.GetAsync(LatestReleaseApiUrl);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            string msg = $"현재 최신 버전 ({currentTag}) · 배포된 릴리스 없음";
+            UpdateStatus(msg);
+            return new UpdateCheckResult(false, currentTag, currentTag, null, null, msg);
+        }
+
+        response.EnsureSuccessStatusCode();
+        string json = await response.Content.ReadAsStringAsync();
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        string tagName = root.TryGetProperty("tag_name", out var tagProp) ? (tagProp.GetString() ?? currentTag) : currentTag;
+        Version? latestVer = ParseVersionFromTag(tagName);
+
+        string? downloadUrl = null;
+        string? assetName = null;
+
+        if (root.TryGetProperty("assets", out var assetsProp) && assetsProp.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var asset in assetsProp.EnumerateArray())
+            {
+                string? name = asset.TryGetProperty("name", out var nProp) ? nProp.GetString() : null;
+                string? url = asset.TryGetProperty("browser_download_url", out var uProp) ? uProp.GetString() : null;
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(url))
+                    continue;
+
+                if (name.EndsWith(".msi", StringComparison.OrdinalIgnoreCase) ||
+                    name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
+                    name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    assetName = name;
+                    downloadUrl = url;
+                    if (name.EndsWith(".msi", StringComparison.OrdinalIgnoreCase))
+                        break; // msi 설치 패키지 최우선
+                }
+            }
+        }
+
+        if (latestVer != null && IsNewerVersion(latestVer, currentVer))
+        {
+            string msg = downloadUrl != null
+                ? $"새 버전 발견: {tagName} (현재 {currentTag})"
+                : $"새 태그 {tagName} 발견 (릴리스 첨부 파일 없음)";
+            UpdateStatus(msg);
+            return new UpdateCheckResult(true, currentTag, tagName, downloadUrl, assetName, msg);
+        }
+
+        string upToDateMsg = $"최신 버전 사용 중 ({currentTag})";
+        UpdateStatus(upToDateMsg);
+        return new UpdateCheckResult(false, currentTag, tagName, null, null, upToDateMsg);
     }
 
     public async Task<bool> DownloadAndApplyUpdateAsync(string downloadUrl, string assetName)
@@ -297,9 +403,13 @@ public sealed class AutoUpdateService : IDisposable
         return Version.TryParse(clean, out Version? v) ? v : null;
     }
 
-    private static HttpClient CreateHttpClient()
+    private static HttpClient CreateHttpClient(bool allowAutoRedirect)
     {
-        var client = new HttpClient
+        var handler = new HttpClientHandler
+        {
+            AllowAutoRedirect = allowAutoRedirect
+        };
+        var client = new HttpClient(handler)
         {
             Timeout = TimeSpan.FromSeconds(25)
         };
