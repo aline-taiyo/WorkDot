@@ -11,12 +11,15 @@ namespace WorkDot;
 
 public partial class MainWindow : Window
 {
+    private const double IdleSecondsBeforeShowingElapsed = 10.0;
+
     private readonly AppSettingsService _settingsService;
     private readonly Win32SnapService _snapService;
     private readonly DaouAttendanceService _attendanceService;
     private readonly TaskbarTrayService _trayService;
     private readonly DispatcherTimer _pollTimer;
     private readonly DispatcherTimer _confirmResetTimer;
+    private readonly DispatcherTimer _idleTimer;
 
     private AttendanceWebWindow? _portalWindow;
     private SettingsWindow? _settingsWindow;
@@ -26,9 +29,10 @@ public partial class MainWindow : Window
     private System.Windows.Point _dragStartScreenPoint;
     private double _windowStartLeft;
     private double _windowStartTop;
-    private bool _isMiniDotMode;
     private bool _isActionBusy;
     private bool _isAwaitingInlineConfirm;
+    private DateTime _lastInteractionUtc = DateTime.UtcNow;
+    private bool _isIdleElapsedVisible;
 
     public MainWindow()
     {
@@ -45,7 +49,6 @@ public partial class MainWindow : Window
         MenuVersionHeader.Header = $"WorkDot {ver}";
 
         _settingsService.SettingsChanged += _ => Dispatcher.Invoke(ApplySettingsAndVisuals);
-        _snapService.SnapStateChanged += OnSnapStateChanged;
         _attendanceService.SnapshotChanged += _ => Dispatcher.Invoke(() =>
         {
             _isAwaitingInlineConfirm = false;
@@ -71,9 +74,19 @@ public partial class MainWindow : Window
             ApplySettingsAndVisuals();
         };
 
+        // 1초 주기로 위젯 비활성(10초 이상 미조작) 상태를 체크하여 (현재시간 - 출근시간) 표시를 갱신
+        _idleTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        _idleTimer.Tick += OnIdleTimerTick;
+
         Loaded += OnMainWindowLoaded;
         Closed += (_, _) =>
         {
+            _idleTimer.Stop();
+            _pollTimer.Stop();
+            _confirmResetTimer.Stop();
             _portalWindow?.ShutdownClose();
             _trayService.Dispose();
             _snapService.Dispose();
@@ -95,10 +108,13 @@ public partial class MainWindow : Window
 
     private async void OnMainWindowLoaded(object sender, RoutedEventArgs e)
     {
+        RecordInteraction();
+        ActionPanel.Visibility = Visibility.Collapsed;
         ApplySettingsAndVisuals();
 
         _snapService.Initialize();
         _snapService.SnapToTaskbarDefault();
+        _idleTimer.Start();
 
         try
         {
@@ -112,6 +128,71 @@ public partial class MainWindow : Window
         }
     }
 
+    private void RecordInteraction()
+    {
+        _lastInteractionUtc = DateTime.UtcNow;
+        if (_isIdleElapsedVisible)
+        {
+            _isIdleElapsedVisible = false;
+            ApplySettingsAndVisuals();
+        }
+    }
+
+    private void OnIdleTimerTick(object? sender, EventArgs e)
+    {
+        if (_isPointerDown || IsMouseOver || OverlayContextMenu.IsOpen)
+        {
+            _lastInteractionUtc = DateTime.UtcNow;
+            if (_isIdleElapsedVisible)
+            {
+                _isIdleElapsedVisible = false;
+                ApplySettingsAndVisuals();
+            }
+            return;
+        }
+
+        double idleSeconds = (DateTime.UtcNow - _lastInteractionUtc).TotalSeconds;
+        bool shouldShowElapsed = idleSeconds >= IdleSecondsBeforeShowingElapsed &&
+                                 _attendanceService.CurrentSnapshot.Status == WorkStatusKind.Working;
+
+        if (shouldShowElapsed || _isIdleElapsedVisible)
+        {
+            _isIdleElapsedVisible = shouldShowElapsed;
+            ApplySettingsAndVisuals();
+        }
+    }
+
+    private static string? FormatWorkingElapsedTime(AttendanceSnapshot snapshot)
+    {
+        if (!string.IsNullOrWhiteSpace(snapshot.ClockInTimeText) &&
+            TimeSpan.TryParse(snapshot.ClockInTimeText.Trim(), CultureInfo.InvariantCulture, out TimeSpan clockInTimeOfDay))
+        {
+            DateTime now = DateTime.Now;
+            DateTime clockInDateTime = now.Date.Add(clockInTimeOfDay);
+            if (clockInDateTime > now.AddMinutes(1))
+            {
+                clockInDateTime = clockInDateTime.AddDays(-1);
+            }
+
+            TimeSpan elapsed = now - clockInDateTime;
+            if (elapsed < TimeSpan.Zero)
+            {
+                elapsed = TimeSpan.Zero;
+            }
+
+            int hours = (int)elapsed.TotalHours;
+            int minutes = elapsed.Minutes;
+            return $"{hours:D2}:{minutes:D2}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(snapshot.WorkedDurationText))
+        {
+            return snapshot.WorkedDurationText;
+        }
+
+        return null;
+    }
+
     private void ApplySettingsAndVisuals()
     {
         var settings = _settingsService.Current;
@@ -121,7 +202,6 @@ public partial class MainWindow : Window
         ShowInTaskbar = false;
         CapsuleBorder.Opacity = settings.WidgetOpacity;
 
-        bool scaleChanged = Math.Abs(CapsuleScaleTransform.ScaleX - settings.WidgetScale) > 0.005;
         CapsuleScaleTransform.ScaleX = settings.WidgetScale;
         CapsuleScaleTransform.ScaleY = settings.WidgetScale;
 
@@ -132,7 +212,6 @@ public partial class MainWindow : Window
             CapsuleBorder.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#FFFFFF"));
             CapsuleBorder.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E4E4E7"));
             ActionDivider.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E4E4E7"));
-            SnapClipIconRect.Fill = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#71717A"));
             iconFgColor = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#52525B");
         }
         else
@@ -140,7 +219,6 @@ public partial class MainWindow : Window
             CapsuleBorder.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#09090B"));
             CapsuleBorder.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#27272A"));
             ActionDivider.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#27272A"));
-            SnapClipIconRect.Fill = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#A1A1AA"));
             iconFgColor = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#A1A1AA");
         }
 
@@ -167,10 +245,19 @@ public partial class MainWindow : Window
 
         StatusIconRect.OpacityMask = (System.Windows.Media.Brush)Resources[isWorking ? "BrushIconSun" : "BrushIconMoon"];
         StatusIconRect.Fill = activeBrush;
-        StatusBadgeBorder.ToolTip = $"{(isWorking ? "근무중" : "퇴근")} · {snapshot.SubText}";
 
-        // 2. 텍스트 최소화: 확인/로그인 외에는 출퇴근 시각(HH:mm)만 짧게 표시하거나 아예 숨김
-        if (_isActionBusy)
+        string? elapsedText = isWorking ? FormatWorkingElapsedTime(snapshot) : null;
+        StatusBadgeBorder.ToolTip = isWorking && !string.IsNullOrWhiteSpace(elapsedText)
+            ? $"근무중 ({elapsedText}) · {snapshot.SubText}"
+            : $"{(isWorking ? "근무중" : "퇴근")} · {snapshot.SubText}";
+
+        // 2. 드래그 중에는 무조건 미니모드(텍스트 숨김), 평소에는 10초 이상 미조작 시에만 근무중인 시간(현재시간 - 출근시간) 표시
+        if (_hasMovedDuringDrag)
+        {
+            SubStatusText.Text = string.Empty;
+            SubStatusText.Visibility = Visibility.Collapsed;
+        }
+        else if (_isActionBusy)
         {
             SubStatusText.Text = "...";
             SubStatusText.Foreground = activeBrush;
@@ -189,20 +276,16 @@ public partial class MainWindow : Window
             SubStatusText.Foreground = activeBrush;
             SubStatusText.Visibility = Visibility.Visible;
         }
+        else if (_isIdleElapsedVisible && isWorking && !string.IsNullOrWhiteSpace(elapsedText))
+        {
+            SubStatusText.Text = elapsedText;
+            SubStatusText.Foreground = activeBrush;
+            SubStatusText.Visibility = Visibility.Visible;
+        }
         else
         {
-            string? compactTime = isWorking ? snapshot.ClockInTimeText : snapshot.ClockOutTimeText;
-            if (!string.IsNullOrWhiteSpace(compactTime))
-            {
-                SubStatusText.Text = compactTime;
-                SubStatusText.Foreground = activeBrush;
-                SubStatusText.Visibility = Visibility.Visible;
-            }
-            else
-            {
-                SubStatusText.Text = string.Empty;
-                SubStatusText.Visibility = Visibility.Collapsed;
-            }
+            SubStatusText.Text = string.Empty;
+            SubStatusText.Visibility = Visibility.Collapsed;
         }
 
         // 3. Shutdown / Power 아이콘 버튼 (출퇴근 액션)
@@ -225,13 +308,10 @@ public partial class MainWindow : Window
         ImageSource dynamicIcon = _trayService.UpdateTrayAndWindowIcon(snapshot, activeStatusColor);
         Icon = dynamicIcon;
 
-        if (IsLoaded)
+        if (IsLoaded && !_isPointerDown)
         {
             UpdateLayout();
-            if (scaleChanged && _snapService.CurrentSnap != null)
-            {
-                _snapService.EvaluateMagneticSnap(applyPosition: true);
-            }
+            _snapService.AlignToSnappedEdges();
         }
     }
 
@@ -276,30 +356,9 @@ public partial class MainWindow : Window
             : System.Windows.Media.Brushes.White;
     }
 
-    private void OnSnapStateChanged(SnapTargetInfo? snapInfo)
-    {
-        Dispatcher.Invoke(() =>
-        {
-            if (snapInfo == null)
-            {
-                SnapBadge.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                SnapBadge.Visibility = Visibility.Visible;
-                SnapBadge.ToolTip = "윈도우 경계 스냅됨";
-            }
-        });
-    }
-
     private void OnOverlayMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ClickCount == 2)
-        {
-            ToggleMiniMode();
-            e.Handled = true;
-            return;
-        }
+        RecordInteraction();
 
         if (e.OriginalSource is DependencyObject dep && IsInsideButton(dep))
             return;
@@ -316,6 +375,8 @@ public partial class MainWindow : Window
 
     private void OnOverlayMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
     {
+        RecordInteraction();
+
         if (!_isPointerDown)
             return;
 
@@ -330,6 +391,11 @@ public partial class MainWindow : Window
         if (!_hasMovedDuringDrag && (Math.Abs(deltaX) > 3 || Math.Abs(deltaY) > 3))
         {
             _hasMovedDuringDrag = true;
+
+            // 드래그 시작 시 즉시 미니모드로 축소하여 경계 스냅 기준 크기를 고정
+            ActionPanel.Visibility = Visibility.Collapsed;
+            SubStatusText.Visibility = Visibility.Collapsed;
+            UpdateLayout();
         }
 
         if (_hasMovedDuringDrag)
@@ -342,6 +408,8 @@ public partial class MainWindow : Window
 
     private void OnOverlayMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        RecordInteraction();
+
         if (!_isPointerDown)
             return;
 
@@ -351,12 +419,20 @@ public partial class MainWindow : Window
 
         if (_hasMovedDuringDrag)
         {
+            _hasMovedDuringDrag = false;
+            UpdateLayout();
             _snapService.EvaluateMagneticSnap(applyPosition: true);
+        }
+        else if (IsMouseOver)
+        {
+            SetExpandedMode(true);
         }
     }
 
     private void OnOverlayMouseWheel(object sender, MouseWheelEventArgs e)
     {
+        RecordInteraction();
+
         if ((Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
         {
             double step = e.Delta > 0 ? 0.05 : -0.05;
@@ -368,27 +444,39 @@ public partial class MainWindow : Window
 
     private void OnOverlayMouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
     {
-        if (_isMiniDotMode)
+        RecordInteraction();
+
+        if (!_isPointerDown)
         {
-            ActionPanel.Visibility = Visibility.Visible;
+            SetExpandedMode(true);
         }
     }
 
     private void OnOverlayMouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
     {
-        if (_isMiniDotMode && !_isPointerDown)
+        RecordInteraction();
+
+        if (!_isPointerDown)
         {
-            ActionPanel.Visibility = Visibility.Collapsed;
+            _isAwaitingInlineConfirm = false;
+            _confirmResetTimer.Stop();
+            SetExpandedMode(false);
+            ApplySettingsAndVisuals();
         }
     }
 
-    private void ToggleMiniMode()
+    private void SetExpandedMode(bool expanded)
     {
-        _isMiniDotMode = !_isMiniDotMode;
-        ActionPanel.Visibility = _isMiniDotMode ? Visibility.Collapsed : Visibility.Visible;
-
-        UpdateLayout();
-        _snapService.EvaluateMagneticSnap(applyPosition: true);
+        Visibility target = expanded ? Visibility.Visible : Visibility.Collapsed;
+        if (ActionPanel.Visibility != target)
+        {
+            ActionPanel.Visibility = target;
+            if (IsLoaded && !_isPointerDown)
+            {
+                UpdateLayout();
+                _snapService.AlignToSnappedEdges();
+            }
+        }
     }
 
     private static bool IsInsideButton(DependencyObject? source)
@@ -404,6 +492,8 @@ public partial class MainWindow : Window
 
     private async void OnPrimaryActionClick(object sender, RoutedEventArgs e)
     {
+        RecordInteraction();
+
         if (_isActionBusy)
             return;
 
@@ -454,6 +544,7 @@ public partial class MainWindow : Window
 
     private void OnContextMenuOpened(object sender, RoutedEventArgs e)
     {
+        RecordInteraction();
         OverlayContextMenu.Placement = PlacementMode.MousePoint;
         MenuAlwaysOnTop.IsChecked = _settingsService.Current.AlwaysOnTop;
         MenuRunAtStartup.IsChecked = _settingsService.Current.RunAtStartup;
@@ -461,6 +552,8 @@ public partial class MainWindow : Window
 
     private void OnOpenSettingsClick(object sender, RoutedEventArgs e)
     {
+        RecordInteraction();
+
         if (_settingsWindow != null && _settingsWindow.IsLoaded)
         {
             _settingsWindow.Activate();
@@ -495,6 +588,7 @@ public partial class MainWindow : Window
 
     private void OnOpenPortalClick(object sender, RoutedEventArgs e)
     {
+        RecordInteraction();
         OpenPortalWindow();
     }
 
@@ -506,6 +600,7 @@ public partial class MainWindow : Window
 
     private async void OnRefreshClick(object sender, RoutedEventArgs e)
     {
+        RecordInteraction();
         await _attendanceService.RefreshStatusAsync();
     }
 
@@ -521,12 +616,9 @@ public partial class MainWindow : Window
 
     private void OnSnapToTaskbarClick(object sender, RoutedEventArgs e)
     {
+        ActionPanel.Visibility = Visibility.Collapsed;
+        UpdateLayout();
         _snapService.SnapToTaskbarDefault();
-    }
-
-    private void OnToggleMiniModeClick(object sender, RoutedEventArgs e)
-    {
-        ToggleMiniMode();
     }
 
     private void OnHideOverlayClick(object sender, RoutedEventArgs e)

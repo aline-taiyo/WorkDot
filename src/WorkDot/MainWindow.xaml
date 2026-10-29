@@ -21,10 +21,6 @@
                     ImageSource="pack://application:,,,/Assets/Icons/icons8-crescent-moon-96.png"
                     Stretch="Uniform"
                     RenderOptions.BitmapScalingMode="HighQuality"/>
-        <ImageBrush x:Key="BrushIconAttach"
-                    ImageSource="pack://application:,,,/Assets/Icons/icons8-attach-96.png"
-                    Stretch="Uniform"
-                    RenderOptions.BitmapScalingMode="HighQuality"/>
         <ImageBrush x:Key="BrushIconShutdown"
                     ImageSource="pack://application:,,,/Assets/Icons/icons8-shutdown-96.png"
                     Stretch="Uniform"
@@ -54,7 +50,7 @@
 
         <Grid.ContextMenu>
             <ContextMenu x:Name="OverlayContextMenu" Opened="OnContextMenuOpened">
-                <MenuItem x:Name="MenuVersionHeader" Header="WorkDot v1.4.1" IsEnabled="False"/>
+                <MenuItem x:Name="MenuVersionHeader" Header="WorkDot v1.4.2" IsEnabled="False"/>
                 <Separator/>
                 <MenuItem Header="환경설정" Click="OnOpenSettingsClick"/>
                 <MenuItem Header="브라우저 열기" Click="OnOpenPortalClick"/>
@@ -74,14 +70,13 @@
                     <MenuItem Header="퇴근 (Moon)" Click="OnForceOffWorkClick"/>
                 </MenuItem>
                 <MenuItem Header="윈도우 경계 정렬" Click="OnSnapToTaskbarClick"/>
-                <MenuItem Header="미니 모드" Click="OnToggleMiniModeClick"/>
                 <MenuItem Header="숨기기" Click="OnHideOverlayClick"/>
                 <Separator/>
                 <MenuItem Header="종료" Click="OnExitClick"/>
             </ContextMenu>
         </Grid.ContextMenu>
 
-        <!-- Minimal Icon-First Floating Toolbar (rounded-xl = 10px) -->
+        <!-- Minimal Icon-First Floating Toolbar (Always Mini by default, Expands on Hover) -->
         <Border x:Name="CapsuleBorder"
                 CornerRadius="10"
                 Background="#09090B"
@@ -100,7 +95,7 @@
 
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
 
-                <!-- 1. Status Chip: Sun (근무중) / Moon (퇴근) + Minimal Time -->
+                <!-- 1. Status Chip: Sun (근무중) / Moon (퇴근) + 10s Idle Working Elapsed Time -->
                 <Border x:Name="StatusBadgeBorder"
                         CornerRadius="6"
                         Background="#1A10B981"
@@ -129,24 +124,11 @@
                     </StackPanel>
                 </Border>
 
-                <!-- 2. Snap Clip Indicator (Visible ONLY when snapped to Windows boundary) -->
-                <Border x:Name="SnapBadge"
-                        Padding="5,0,1,0"
-                        VerticalAlignment="Center"
-                        Visibility="Collapsed"
-                        ToolTip="윈도우 경계 스냅됨">
-                    <Rectangle x:Name="SnapClipIconRect"
-                               Width="14" Height="14"
-                               Fill="#71717A"
-                               OpacityMask="{StaticResource BrushIconAttach}"
-                               RenderOptions.BitmapScalingMode="HighQuality"
-                               VerticalAlignment="Center"/>
-                </Border>
-
-                <!-- 3. Divider + Icon Action Bar -->
+                <!-- 2. Divider + Icon Action Bar (Hidden in Mini Mode, Shown on Hover) -->
                 <StackPanel x:Name="ActionPanel"
                             Orientation="Horizontal"
-                            VerticalAlignment="Center">
+                            VerticalAlignment="Center"
+                            Visibility="Collapsed">
 
                     <!-- 1px Vertical Divider -->
                     <Border x:Name="ActionDivider"

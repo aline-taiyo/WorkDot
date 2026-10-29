@@ -25,7 +25,8 @@ public sealed class SnapTargetInfo
     public bool SnapRight { get; init; }
     public bool SnapTop { get; init; }
     public bool SnapBottom { get; init; }
-    public bool IsTaskbar { get; init; }
+    public bool UseMonitorBoundsHoriz { get; init; }
+    public bool UseMonitorBoundsVert { get; init; }
 }
 
 /// <summary>
@@ -90,14 +91,71 @@ public sealed class Win32SnapService : IDisposable
                 snapLeft: false,
                 snapRight: true,
                 snapTop: false,
-                snapBottom: true);
+                snapBottom: true,
+                useMonHoriz: false,
+                useMonVert: false);
             return;
         }
 
         var workArea = SystemParameters.WorkArea;
         _overlayWindow.Left = workArea.Right - _overlayWindow.ActualWidth + ShadowInsetDip;
         _overlayWindow.Top = workArea.Bottom - _overlayWindow.ActualHeight + ShadowInsetDip;
-        AttachToBoundary("윈도우 경계", SnapEdge.BottomInside, false, true, false, true);
+        AttachToBoundary("윈도우 경계", SnapEdge.BottomInside, false, true, false, true, false, false);
+    }
+
+    /// <summary>
+    /// 위젯 크기가 호버 확장/미니 모드로 변경될 때 기존 스냅된 화면 경계(우측/하단 등) 정렬을 흔들림 없이 유지합니다.
+    /// </summary>
+    public void AlignToSnappedEdges()
+    {
+        if (_currentSnap == null || _overlayHwnd == IntPtr.Zero || _isUpdatingPosition || _isDraggingOverlay)
+            return;
+
+        if (!TryGetCurrentMonitorInfo(out MONITORINFO mi))
+            return;
+
+        var (scaleX, scaleY) = GetDpiScale();
+        int insetX = (int)Math.Round(ShadowInsetDip * scaleX);
+        int insetY = (int)Math.Round(ShadowInsetDip * scaleY);
+
+        int myWidth = (int)Math.Round(_overlayWindow.ActualWidth * scaleX);
+        int myHeight = (int)Math.Round(_overlayWindow.ActualHeight * scaleY);
+        if (myWidth <= 0 || myHeight <= 0)
+        {
+            (myWidth, myHeight) = GetOverlayPhysicalSize();
+        }
+
+        if (!GetWindowRect(_overlayHwnd, out RECT myRect))
+            return;
+
+        int targetX = myRect.Left;
+        int targetY = myRect.Top;
+
+        RECT horizRef = _currentSnap.UseMonitorBoundsHoriz ? mi.rcMonitor : mi.rcWork;
+        RECT vertRef = _currentSnap.UseMonitorBoundsVert ? mi.rcMonitor : mi.rcWork;
+
+        if (_currentSnap.SnapRight)
+        {
+            targetX = horizRef.Right - myWidth + insetX;
+        }
+        else if (_currentSnap.SnapLeft)
+        {
+            targetX = horizRef.Left - insetX;
+        }
+
+        if (_currentSnap.SnapBottom)
+        {
+            targetY = vertRef.Bottom - myHeight + insetY;
+        }
+        else if (_currentSnap.SnapTop)
+        {
+            targetY = vertRef.Top - insetY;
+        }
+
+        if (targetX != myRect.Left || targetY != myRect.Top)
+        {
+            SetOverlayPhysicalPosition(targetX, targetY);
+        }
     }
 
     /// <summary>
@@ -118,13 +176,18 @@ public sealed class Win32SnapService : IDisposable
         int insetX = (int)Math.Round(ShadowInsetDip * scaleX);
         int insetY = (int)Math.Round(ShadowInsetDip * scaleY);
 
-        int myWidth = myRect.Right - myRect.Left;
-        int myHeight = myRect.Bottom - myRect.Top;
+        int myWidth = (int)Math.Round(_overlayWindow.ActualWidth * scaleX);
+        int myHeight = (int)Math.Round(_overlayWindow.ActualHeight * scaleY);
+        if (myWidth <= 0 || myHeight <= 0)
+        {
+            myWidth = myRect.Right - myRect.Left;
+            myHeight = myRect.Bottom - myRect.Top;
+        }
 
         int visualLeft = myRect.Left + insetX;
-        int visualRight = myRect.Right - insetX;
+        int visualRight = myRect.Left + myWidth - insetX;
         int visualTop = myRect.Top + insetY;
-        int visualBottom = myRect.Bottom - insetY;
+        int visualBottom = myRect.Top + myHeight - insetY;
 
         int snappedX = myRect.Left;
         int snappedY = myRect.Top;
@@ -133,6 +196,8 @@ public sealed class Win32SnapService : IDisposable
         bool snapRight = false;
         bool snapTop = false;
         bool snapBottom = false;
+        bool useMonHoriz = false;
+        bool useMonVert = false;
 
         RECT work = mi.rcWork;
         RECT mon = mi.rcMonitor;
@@ -150,6 +215,7 @@ public sealed class Win32SnapService : IDisposable
             snappedX = work.Left - insetX;
             snapLeft = true;
             snapRight = false;
+            useMonHoriz = false;
         }
         if (distLeftMon <= SnapThresholdPx && distLeftMon < bestHorizDist)
         {
@@ -157,6 +223,7 @@ public sealed class Win32SnapService : IDisposable
             snappedX = mon.Left - insetX;
             snapLeft = true;
             snapRight = false;
+            useMonHoriz = true;
         }
         if (distRightWork <= SnapThresholdPx && distRightWork < bestHorizDist)
         {
@@ -164,6 +231,7 @@ public sealed class Win32SnapService : IDisposable
             snappedX = work.Right - myWidth + insetX;
             snapRight = true;
             snapLeft = false;
+            useMonHoriz = false;
         }
         if (distRightMon <= SnapThresholdPx && distRightMon < bestHorizDist)
         {
@@ -171,6 +239,7 @@ public sealed class Win32SnapService : IDisposable
             snappedX = mon.Right - myWidth + insetX;
             snapRight = true;
             snapLeft = false;
+            useMonHoriz = true;
         }
 
         // 2. 상/하단 윈도우 화면 및 작업 표시줄 경계 스냅 검사
@@ -186,6 +255,7 @@ public sealed class Win32SnapService : IDisposable
             snappedY = work.Top - insetY;
             snapTop = true;
             snapBottom = false;
+            useMonVert = false;
         }
         if (distTopMon <= SnapThresholdPx && distTopMon < bestVertDist)
         {
@@ -193,6 +263,7 @@ public sealed class Win32SnapService : IDisposable
             snappedY = mon.Top - insetY;
             snapTop = true;
             snapBottom = false;
+            useMonVert = true;
         }
         if (distBottomWork <= SnapThresholdPx && distBottomWork < bestVertDist)
         {
@@ -200,6 +271,7 @@ public sealed class Win32SnapService : IDisposable
             snappedY = work.Bottom - myHeight + insetY;
             snapBottom = true;
             snapTop = false;
+            useMonVert = false;
         }
         if (distBottomMon <= SnapThresholdPx && distBottomMon < bestVertDist)
         {
@@ -207,6 +279,7 @@ public sealed class Win32SnapService : IDisposable
             snappedY = mon.Bottom - myHeight + insetY;
             snapBottom = true;
             snapTop = false;
+            useMonVert = true;
         }
 
         if (snapLeft || snapRight || snapTop || snapBottom)
@@ -221,7 +294,7 @@ public sealed class Win32SnapService : IDisposable
                 : snapRight ? SnapEdge.RightOutside
                 : SnapEdge.LeftOutside;
 
-            AttachToBoundary("윈도우 경계", edge, snapLeft, snapRight, snapTop, snapBottom);
+            AttachToBoundary("윈도우 경계", edge, snapLeft, snapRight, snapTop, snapBottom, useMonHoriz, useMonVert);
         }
         else
         {
@@ -244,7 +317,9 @@ public sealed class Win32SnapService : IDisposable
         bool snapLeft,
         bool snapRight,
         bool snapTop,
-        bool snapBottom)
+        bool snapBottom,
+        bool useMonHoriz,
+        bool useMonVert)
     {
         _currentSnap = new SnapTargetInfo
         {
@@ -255,7 +330,8 @@ public sealed class Win32SnapService : IDisposable
             SnapRight = snapRight,
             SnapTop = snapTop,
             SnapBottom = snapBottom,
-            IsTaskbar = true
+            UseMonitorBoundsHoriz = useMonHoriz,
+            UseMonitorBoundsVert = useMonVert
         };
 
         SnapStateChanged?.Invoke(_currentSnap);
@@ -307,7 +383,6 @@ public sealed class Win32SnapService : IDisposable
 
     public void Dispose()
     {
-        // No unmanaged hooks required for screen-edge-only snapping
     }
 
     [StructLayout(LayoutKind.Sequential)]
