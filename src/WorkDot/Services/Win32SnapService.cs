@@ -35,7 +35,7 @@ public sealed class SnapTargetInfo
 public sealed class Win32SnapService : IDisposable
 {
     private const int SnapThresholdPx = 24;
-    private const int ShadowInsetDip = 6; // RootContainer Margin(6)과 동일하게 맞춰 경계에 0px 밀착 스냅
+    private const int ShadowInsetDip = 0; // 그림자 제거로 창 크기와 위젯 외곽선이 1:1 일치
     private const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
 
     private readonly Window _overlayWindow;
@@ -62,6 +62,27 @@ public sealed class Win32SnapService : IDisposable
     public void Initialize()
     {
         _overlayHwnd = new WindowInteropHelper(_overlayWindow).Handle;
+        DisableSystemWindowBorder(_overlayHwnd);
+    }
+
+    private static void DisableSystemWindowBorder(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero)
+            return;
+
+        try
+        {
+            // Windows 11 DWM 사각 테두리 및 기본 그림자 완전 비활성화
+            int ncPolicy = 1; // DWMNCRP_DISABLED
+            DwmSetWindowAttribute(hwnd, 2, ref ncPolicy, sizeof(int));
+
+            uint borderNone = 0xFFFFFFFE; // DWMWA_COLOR_NONE
+            DwmSetWindowAttribute(hwnd, 34, ref borderNone, sizeof(uint));
+        }
+        catch
+        {
+            // 구버전 Windows 호환 무시
+        }
     }
 
     /// <summary>
@@ -411,4 +432,10 @@ public sealed class Win32SnapService : IDisposable
 
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref uint attrValue, int attrSize);
 }

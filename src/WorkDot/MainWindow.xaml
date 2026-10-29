@@ -40,7 +40,7 @@
     </Window.Resources>
 
     <Grid x:Name="RootContainer"
-          Margin="6"
+          Margin="0"
           MouseLeftButtonDown="OnOverlayMouseLeftButtonDown"
           MouseMove="OnOverlayMouseMove"
           MouseLeftButtonUp="OnOverlayMouseLeftButtonUp"
@@ -86,12 +86,6 @@
             <Border.LayoutTransform>
                 <ScaleTransform x:Name="CapsuleScaleTransform" ScaleX="1.0" ScaleY="1.0"/>
             </Border.LayoutTransform>
-            <Border.Effect>
-                <DropShadowEffect Color="#000000"
-                                  BlurRadius="8"
-                                  ShadowDepth="1"
-                                  Opacity="0.45"/>
-            </Border.Effect>
 
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
 
