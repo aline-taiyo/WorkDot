@@ -958,7 +958,13 @@ public sealed class DaouAttendanceService
 
             if (_manualStatusOverride.HasValue && _manualOverrideDate == DateTime.Today)
             {
-                if (_manualStatusOverride.Value == WorkStatusKind.Break)
+                // 다우오피스에서 실제 최신 상태(state)가 명확히 감지된 경우,
+                // 다우오피스의 실제 근태 정보를 우선(Source of Truth)으로 삼고 수동 오버라이드를 자동 해제한다.
+                if (state == "WORKING" || state == "BREAK" || state == "OFF_WORK")
+                {
+                    _manualStatusOverride = null;
+                }
+                else if (_manualStatusOverride.Value == WorkStatusKind.Break)
                 {
                     string breakClockIn = !string.IsNullOrWhiteSpace(clockIn) ? clockIn : (CurrentSnapshot.ClockInTimeText ?? DateTime.Now.ToString("HH:mm"));
                     DateTime breakStart = _activeBreakStartTime ?? DateTime.Now;
@@ -974,11 +980,13 @@ public sealed class DaouAttendanceService
                         breakStart));
                     return;
                 }
-
-                state = _manualStatusOverride.Value == WorkStatusKind.Working ? "WORKING" : "OFF_WORK";
-                if (state == "WORKING" && string.IsNullOrWhiteSpace(clockIn))
+                else
                 {
-                    clockIn = CurrentSnapshot.ClockInTimeText;
+                    state = _manualStatusOverride.Value == WorkStatusKind.Working ? "WORKING" : "OFF_WORK";
+                    if (state == "WORKING" && string.IsNullOrWhiteSpace(clockIn))
+                    {
+                        clockIn = CurrentSnapshot.ClockInTimeText;
+                    }
                 }
             }
 
@@ -1253,7 +1261,7 @@ public sealed class DaouAttendanceService
                     if (tag) {
                         const tagCls = (tag.className || '').toLowerCase();
                         const tagTxt = clean(tag.innerText);
-                        if (tagTxt === '휴게' || tagTxt.includes('휴게') || tagTxt === '외출') {
+                        if (tagTxt === '휴게' || tagTxt === '외출') {
                             badgeText = '휴게';
                             apiStatus = tagTxt;
                         } else if (tagCls.includes('positive') || tagTxt === '업무' || tagTxt.includes('근무')) {
@@ -1294,22 +1302,24 @@ public sealed class DaouAttendanceService
                         const entry = window.__workdotApiLogs[i];
                         if (!entry || !entry.data) continue;
 
+                        // gadget/today 최신 응답에서 현재 근무상태(workStatusName) 안전하게 추출
+                        if (entry.url && entry.url.includes('gadget/today') && entry.data?.data?.workStatusName && !badgeText) {
+                            const ws = entry.data.data.workStatusName;
+                            if (ws === '휴게' || ws === '외출') {
+                                badgeText = '휴게';
+                                apiStatus = ws;
+                            } else if (ws === '업무') {
+                                badgeText = '근무중';
+                                apiStatus = ws;
+                            }
+                        }
+
                         let entryHadAttendRecord = false;
                         const visit = (obj) => {
                             if (!obj || typeof obj !== 'object') return;
                             if (Array.isArray(obj)) {
                                 obj.forEach(visit);
                                 return;
-                            }
-
-                            if (typeof obj.workStatusName === 'string') {
-                                if (obj.workStatusName === '휴게' || obj.workStatusName === '외출') {
-                                    badgeText = '휴게';
-                                    apiStatus = obj.workStatusName;
-                                } else if (obj.workStatusName === '업무' && !badgeText) {
-                                    badgeText = '근무중';
-                                    apiStatus = obj.workStatusName;
-                                }
                             }
 
                             // 다우오피스 근무그룹 휴게시간 목록 (fixedBreakTimeList) 추출
@@ -1340,9 +1350,26 @@ public sealed class DaouAttendanceService
 
                             // 이미 최신 API 응답(또는 실시간 가젯 DOM)에서 출퇴근 시각을 확보했다면 과거 로그로 덮어쓰지 않음
                             if (!lockedLatestAttendRecord) {
-                                const inRaw = obj.startWorkTime ?? obj.clockInTime ?? obj.workInTime ?? obj.attndInTime ?? obj.inTime ?? obj.checkInTime ?? obj.realClockInTime;
-                                const outRaw = obj.endWorkTime ?? obj.clockOutTime ?? obj.workOutTime ?? obj.attndOutTime ?? obj.outTime ?? obj.checkOutTime ?? obj.realClockOutTime;
+                                let inRaw = obj.startWorkTime ?? obj.clockInTime ?? obj.workInTime ?? obj.attndInTime ?? obj.inTime ?? obj.checkInTime ?? obj.realClockInTime;
+                                let outRaw = obj.endWorkTime ?? obj.clockOutTime ?? obj.workOutTime ?? obj.attndOutTime ?? obj.outTime ?? obj.checkOutTime ?? obj.realClockOutTime;
                                 const stRaw = obj.displayWorkType ?? obj.workStatusName ?? obj.workStatus ?? obj.timelineStatus ?? obj.attndStatus ?? obj.workingStatus ?? obj.statusName ?? obj.stateName;
+
+                                if (typeof inRaw === 'string' && inRaw.includes('T')) {
+                                    try {
+                                        const d = new Date(inRaw);
+                                        if (!isNaN(d.getTime())) {
+                                            inRaw = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+                                        }
+                                    } catch {}
+                                }
+                                if (typeof outRaw === 'string' && outRaw.includes('T')) {
+                                    try {
+                                        const d = new Date(outRaw);
+                                        if (!isNaN(d.getTime())) {
+                                            outRaw = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+                                        }
+                                    } catch {}
+                                }
 
                                 if (typeof inRaw === 'string' && timeOnlyRe.test(inRaw) && !clockIn) {
                                     const m = inRaw.match(timeOnlyRe)[0];

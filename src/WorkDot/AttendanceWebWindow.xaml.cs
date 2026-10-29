@@ -153,6 +153,7 @@ public partial class AttendanceWebWindow : Window
 
     private async void OnSyncAndCloseClick(object sender, RoutedEventArgs e)
     {
+        _attendanceService.ClearManualStatusOverride();
         if (PortalWebView.CoreWebView2 != null)
         {
             await _attendanceService.ProbeDomAndApiStatusAsync(PortalWebView.CoreWebView2);
