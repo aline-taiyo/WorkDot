@@ -365,7 +365,7 @@
                                            FontWeight="SemiBold"
                                            Foreground="#FAFAFA"/>
                                 <TextBlock x:Name="UpdateStatusText"
-                                           Text="github.com/xl-taiyo/WorkDot"
+                                           Text="github.com/aline-taiyo/WorkDot"
                                            FontFamily="{StaticResource SansFont}"
                                            FontSize="11.5"
                                            Foreground="#71717A"
@@ -390,7 +390,7 @@
                                         BorderBrush="#27272A"
                                         Foreground="#FAFAFA"
                                         Padding="10,5"
-                                        ToolTip="https://github.com/xl-taiyo/WorkDot 브라우저로 열기"
+                                        ToolTip="https://github.com/aline-taiyo/WorkDot 브라우저로 열기"
                                         Click="OnOpenGitHubRepoClick"/>
                             </StackPanel>
                         </Grid>

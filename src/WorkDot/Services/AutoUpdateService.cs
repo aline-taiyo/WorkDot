@@ -19,13 +19,13 @@ public sealed record UpdateCheckResult(
     string Message);
 
 /// <summary>
-/// GitHub Releases (https://github.com/xl-taiyo/WorkDot/releases) 기반 버전 확인 및 자동 업데이트를 수행합니다.
+/// GitHub Releases (https://github.com/aline-taiyo/WorkDot/releases) 기반 버전 확인 및 자동 업데이트를 수행합니다.
 /// </summary>
 public sealed class AutoUpdateService : IDisposable
 {
-    public const string GitHubRepoUrl = "https://github.com/xl-taiyo/WorkDot";
-    public const string GitHubReleasesUrl = "https://github.com/xl-taiyo/WorkDot/releases";
-    private const string LatestReleaseApiUrl = "https://api.github.com/repos/xl-taiyo/WorkDot/releases/latest";
+    public const string GitHubRepoUrl = "https://github.com/aline-taiyo/WorkDot";
+    public const string GitHubReleasesUrl = "https://github.com/aline-taiyo/WorkDot/releases";
+    private const string LatestReleaseApiUrl = "https://api.github.com/repos/aline-taiyo/WorkDot/releases/latest";
 
     private static readonly HttpClient Http = CreateHttpClient();
 

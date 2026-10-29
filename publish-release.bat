@@ -27,7 +27,7 @@ if %errorlevel%==0 (
     gh release create "%TAG%" "dist\WorkDot-win-x64.zip" --title "WorkDot %TAG%" --generate-notes
 ) else (
     echo 참고: GitHub에 태그(git tag %TAG% ^&^& git push origin %TAG%)를 푸시하면 GitHub Actions가 자동으로 Release를 배포하거나,
-    echo https://github.com/xl-taiyo/WorkDot/releases/new 에 dist\WorkDot-win-x64.zip 파일을 업로드할 수 있습니다.
+    echo https://github.com/aline-taiyo/WorkDot/releases/new 에 dist\WorkDot-win-x64.zip 파일을 업로드할 수 있습니다.
 )
 
 endlocal

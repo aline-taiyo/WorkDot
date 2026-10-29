@@ -50,7 +50,9 @@
 
         <Grid.ContextMenu>
             <ContextMenu x:Name="OverlayContextMenu" Opened="OnContextMenuOpened">
-                <MenuItem x:Name="MenuVersionHeader" Header="WorkDot v1.4.2" IsEnabled="False"/>
+                <MenuItem x:Name="MenuVersionHeader" Header="WorkDot v1.5.0" IsEnabled="False"/>
+                <Separator/>
+                <MenuItem x:Name="MenuClockActionItem" Header="퇴근하기" FontWeight="SemiBold" Click="OnMenuClockActionClick"/>
                 <Separator/>
                 <MenuItem Header="환경설정" Click="OnOpenSettingsClick"/>
                 <MenuItem Header="브라우저 열기" Click="OnOpenPortalClick"/>

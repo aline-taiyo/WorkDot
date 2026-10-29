@@ -598,11 +598,17 @@ public sealed class DaouAttendanceService
             if (result.StartsWith("OK:", StringComparison.Ordinal))
             {
                 await Task.Delay(600);
-                await _webView.CoreWebView2.ExecuteScriptAsync(GetConfirmModalClickScript());
+                string modalRaw = await _webView.CoreWebView2.ExecuteScriptAsync(GetConfirmModalClickScript());
+                string modalRes = JsonSerializer.Deserialize<string>(modalRaw) ?? "NO_MODAL";
+                if (modalRes.StartsWith("NEEDS_USER_INPUT", StringComparison.Ordinal))
+                {
+                    return (false, "다우오피스 추가 확인(근무지 선택 등)이 필요합니다.");
+                }
+
                 await Task.Delay(1000);
                 await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
 
-                return (true, clockIn ? "출근 처리가 요청되었습니다." : "퇴근 처리가 요청되었습니다.");
+                return (true, clockIn ? "출근 처리가 완료되었습니다." : "퇴근 처리가 완료되었습니다.");
             }
 
             return (false, $"다우오피스 페이지에서 {(clockIn ? "출근" : "퇴근")} 버튼을 찾지 못했습니다 ({result}). 그룹웨어 창에서 직접 확인해주세요.");
@@ -972,12 +978,51 @@ public sealed class DaouAttendanceService
                 const todayDot = `${yyyy}.${mm}.${dd}`;
                 const todayCompact = `${yyyy}${mm}${dd}`;
 
-                // 전략 1: 가로챈 다우오피스 API JSON(__workdotApiLogs)에서 오늘 데이터 및 휴게시간(fixedBreakTimeList) 추출
+                // 전략 0: 다우오피스 EHR 좌측 실시간 근태 가젯(.lnb_gadget.gadget_attend) DOM에서 최우선 추출
+                for (const doc of docs) {
+                    const gadget = doc.querySelector('.lnb_gadget.gadget_attend, .attend_card');
+                    if (!gadget) continue;
+
+                    const tag = gadget.querySelector('.gadget_header .basic_tag, .card_header .basic_tag');
+                    if (tag) {
+                        const tagCls = (tag.className || '').toLowerCase();
+                        const tagTxt = clean(tag.innerText);
+                        if (tagCls.includes('positive')) {
+                            badgeText = '근무중';
+                            apiStatus = tagTxt || 'ON';
+                        } else if (tagCls.includes('neutral') || tagTxt === '퇴근' || tagTxt === '업무종료') {
+                            badgeText = '퇴근';
+                            apiStatus = tagTxt || 'OFF';
+                        }
+                    }
+
+                    const workTypes = Array.from(gadget.querySelectorAll('.working_hours .work_type'));
+                    for (const wt of workTypes) {
+                        const tit = clean(wt.querySelector('.tit')?.innerText || '');
+                        const data = clean(wt.querySelector('.data')?.innerText || '');
+                        if (tit.includes('출근')) {
+                            const m = data.match(timeOnlyRe);
+                            if (m && !isLiveClockValue(m[0])) clockIn = m[0];
+                        } else if (tit.includes('퇴근')) {
+                            const m = data.match(timeOnlyRe);
+                            if (m && !isLiveClockValue(m[0])) {
+                                clockOut = m[0];
+                                clockOutExplicitlyUnset = false;
+                            } else if (unsetRe.test(data) && !clockOut) {
+                                clockOutExplicitlyUnset = true;
+                            }
+                        }
+                    }
+                }
+
+                // 전략 1: 가로챈 다우오피스 API JSON(__workdotApiLogs)에서 최신 오늘 데이터 및 휴게시간(fixedBreakTimeList) 추출
                 if (Array.isArray(window.__workdotApiLogs)) {
+                    let lockedLatestAttendRecord = Boolean(clockIn || clockOut);
                     for (let i = window.__workdotApiLogs.length - 1; i >= 0; i--) {
                         const entry = window.__workdotApiLogs[i];
                         if (!entry || !entry.data) continue;
 
+                        let entryHadAttendRecord = false;
                         const visit = (obj) => {
                             if (!obj || typeof obj !== 'object') return;
                             if (Array.isArray(obj)) {
@@ -1011,27 +1056,37 @@ public sealed class DaouAttendanceService
                                 duration = `${pad2(h)}:${pad2(m)}`;
                             }
 
-                            const inRaw = obj.startWorkTime ?? obj.clockInTime ?? obj.workInTime ?? obj.attndInTime ?? obj.inTime ?? obj.checkInTime ?? obj.realClockInTime;
-                            const outRaw = obj.endWorkTime ?? obj.clockOutTime ?? obj.workOutTime ?? obj.attndOutTime ?? obj.outTime ?? obj.checkOutTime ?? obj.realClockOutTime;
-                            const stRaw = obj.workStatusName ?? obj.displayWorkType ?? obj.workStatus ?? obj.timelineStatus ?? obj.attndStatus ?? obj.workingStatus ?? obj.statusName ?? obj.stateName;
+                            // 이미 최신 API 응답(또는 실시간 가젯 DOM)에서 출퇴근 시각을 확보했다면 과거 로그로 덮어쓰지 않음
+                            if (!lockedLatestAttendRecord) {
+                                const inRaw = obj.startWorkTime ?? obj.clockInTime ?? obj.workInTime ?? obj.attndInTime ?? obj.inTime ?? obj.checkInTime ?? obj.realClockInTime;
+                                const outRaw = obj.endWorkTime ?? obj.clockOutTime ?? obj.workOutTime ?? obj.attndOutTime ?? obj.outTime ?? obj.checkOutTime ?? obj.realClockOutTime;
+                                const stRaw = obj.displayWorkType ?? obj.workStatusName ?? obj.workStatus ?? obj.timelineStatus ?? obj.attndStatus ?? obj.workingStatus ?? obj.statusName ?? obj.stateName;
 
-                            if (typeof inRaw === 'string' && timeOnlyRe.test(inRaw) && !clockIn) {
-                                const m = inRaw.match(timeOnlyRe)[0];
-                                if (!isLiveClockValue(m)) clockIn = m;
-                            }
-                            if (typeof outRaw === 'string') {
-                                if (timeOnlyRe.test(outRaw) && !outRaw.startsWith('00:00') && !clockOut) {
-                                    const m = outRaw.match(timeOnlyRe)[0];
-                                    if (!isLiveClockValue(m)) clockOut = m;
-                                } else if (!outRaw || unsetRe.test(outRaw)) {
+                                if (typeof inRaw === 'string' && timeOnlyRe.test(inRaw) && !clockIn) {
+                                    const m = inRaw.match(timeOnlyRe)[0];
+                                    if (!isLiveClockValue(m)) {
+                                        clockIn = m;
+                                        entryHadAttendRecord = true;
+                                    }
+                                }
+                                if (typeof outRaw === 'string') {
+                                    if (timeOnlyRe.test(outRaw) && !outRaw.startsWith('00:00') && !clockOut) {
+                                        const m = outRaw.match(timeOnlyRe)[0];
+                                        if (!isLiveClockValue(m)) {
+                                            clockOut = m;
+                                            clockOutExplicitlyUnset = false;
+                                            entryHadAttendRecord = true;
+                                        }
+                                    } else if ((!outRaw || unsetRe.test(outRaw)) && !clockOut) {
+                                        clockOutExplicitlyUnset = true;
+                                    }
+                                } else if (inRaw && (outRaw === null || outRaw === undefined || outRaw === '') && !clockOut) {
                                     clockOutExplicitlyUnset = true;
                                 }
-                            } else if (inRaw && (outRaw === null || outRaw === undefined || outRaw === '')) {
-                                clockOutExplicitlyUnset = true;
-                            }
 
-                            if (typeof stRaw === 'string' && !apiStatus) {
-                                apiStatus = stRaw;
+                                if (typeof stRaw === 'string' && !apiStatus) {
+                                    apiStatus = stRaw;
+                                }
                             }
 
                             for (const k of Object.keys(obj)) {
@@ -1039,6 +1094,9 @@ public sealed class DaouAttendanceService
                             }
                         };
                         try { visit(entry.data); } catch {}
+                        if (entryHadAttendRecord) {
+                            lockedLatestAttendRecord = true;
+                        }
                     }
                 }
 
@@ -1221,7 +1279,7 @@ public sealed class DaouAttendanceService
                     }
                 }
 
-                if (clockOutExplicitlyUnset) {
+                if (clockOutExplicitlyUnset && !clockOut) {
                     clockOut = null;
                 }
 
@@ -1278,15 +1336,35 @@ public sealed class DaouAttendanceService
     private static string GetClockInTriggerScript() => """
         (() => {
             const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+            // 1. 다우오피스 EHR 좌측 근태 가젯(.lnb_gadget.gadget_attend .attend_btn button) 최우선 탐색
+            const gadgetBtns = Array.from(document.querySelectorAll('.lnb_gadget.gadget_attend .attend_btn button, .attend_card .attend_btn button, .attend_btn button'));
+            for (const btn of gadgetBtns) {
+                const t = clean(btn.innerText);
+                if (t === '출근하기' || t.startsWith('출근하기') || t === '출근' || t === '업무시작') {
+                    if (btn.disabled || btn.classList.contains('disabled')) {
+                        return 'DISABLED:' + t;
+                    }
+                    btn.click();
+                    return 'OK:GADGET:' + t;
+                }
+            }
+
+            // 2. 레거시 직접 셀렉터
             const direct = document.querySelector('#workIn, #clockIn, [data-role="clockIn"], [data-action="clockIn"], .btn_work_in');
             if (direct) {
                 direct.click();
                 return 'OK:DIRECT';
             }
-            const candidates = Array.from(document.querySelectorAll('button, a, span, div[role="button"]'));
+
+            // 3. 일반 버튼 요소 탐색 (단순 텍스트 span 제외)
+            const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]'));
             for (const el of candidates) {
+                if (el.offsetParent === null) continue;
                 const t = clean(el.innerText);
-                if (t === '출근하기' || t === '출근' || t === '업무시작') {
+                if (t === '출근하기' || t.startsWith('출근하기') || t === '업무시작') {
+                    if (el.disabled || el.classList.contains('disabled')) {
+                        return 'DISABLED:' + t;
+                    }
                     el.click();
                     return 'OK:' + t;
                 }
@@ -1298,15 +1376,35 @@ public sealed class DaouAttendanceService
     private static string GetClockOutTriggerScript() => """
         (() => {
             const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+            // 1. 다우오피스 EHR 좌측 근태 가젯(.lnb_gadget.gadget_attend .attend_btn button) 최우선 탐색
+            const gadgetBtns = Array.from(document.querySelectorAll('.lnb_gadget.gadget_attend .attend_btn button, .attend_card .attend_btn button, .attend_btn button'));
+            for (const btn of gadgetBtns) {
+                const t = clean(btn.innerText);
+                if (t === '퇴근하기' || t.startsWith('퇴근하기') || t === '퇴근' || t === '업무종료') {
+                    if (btn.disabled || btn.classList.contains('disabled')) {
+                        return 'DISABLED:' + t;
+                    }
+                    btn.click();
+                    return 'OK:GADGET:' + t;
+                }
+            }
+
+            // 2. 레거시 직접 셀렉터
             const direct = document.querySelector('#workOut, #clockOut, [data-role="clockOut"], [data-action="clockOut"], .btn_work_out');
             if (direct) {
                 direct.click();
                 return 'OK:DIRECT';
             }
-            const candidates = Array.from(document.querySelectorAll('button, a, span, div[role="button"]'));
+
+            // 3. 일반 버튼 요소 탐색 (캘린더/표 내부의 단순 텍스트 span은 클릭하지 않도록 제외)
+            const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]'));
             for (const el of candidates) {
+                if (el.offsetParent === null) continue;
                 const t = clean(el.innerText);
-                if (t === '퇴근하기' || t === '퇴근' || t === '업무종료') {
+                if (t === '퇴근하기' || t.startsWith('퇴근하기') || t === '업무종료') {
+                    if (el.disabled || el.classList.contains('disabled')) {
+                        return 'DISABLED:' + t;
+                    }
                     el.click();
                     return 'OK:' + t;
                 }
@@ -1318,6 +1416,34 @@ public sealed class DaouAttendanceService
     private static string GetConfirmModalClickScript() => """
         (() => {
             const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+            // 1. 다우오피스 EHR React 다이얼로그 (.dop_dialog.open) 처리
+            const dopDialog = document.querySelector('.dop_dialog.open, [role="dialog"]');
+            if (dopDialog) {
+                const radios = Array.from(dopDialog.querySelectorAll('.dop_radio input[type="radio"]'));
+                if (radios.length === 1 && !radios[0].checked) {
+                    radios[0].click();
+                } else if (radios.length > 1 && !radios.some(r => r.checked)) {
+                    return 'NEEDS_USER_INPUT:WORK_LOCATION';
+                }
+
+                const majorBtn = dopDialog.querySelector('.popup_btn_area button.solid.major, button.solid.major');
+                if (majorBtn && !majorBtn.disabled) {
+                    majorBtn.click();
+                    return 'CONFIRMED:DOP_DIALOG';
+                }
+
+                const btns = Array.from(dopDialog.querySelectorAll('.popup_btn_area button, button'));
+                for (const btn of btns) {
+                    const t = clean(btn.innerText);
+                    if ((t === '확인' || t === '예' || t === '출근' || t === '퇴근') && !btn.disabled) {
+                        btn.click();
+                        return 'CONFIRMED:' + t;
+                    }
+                }
+            }
+
+            // 2. 레거시 다우오피스 팝업 처리
             const modalBtns = Array.from(document.querySelectorAll('.go_popup button, .go_popup a.btn_major_s, .modal button, .layer_normal a.btn_major_s, button.btn_major, a.btn_major'));
             for (const btn of modalBtns) {
                 const t = clean(btn.innerText);

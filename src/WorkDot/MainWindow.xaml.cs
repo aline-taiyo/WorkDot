@@ -71,6 +71,10 @@ public partial class MainWindow : Window
         {
             _confirmResetTimer.Stop();
             _isAwaitingInlineConfirm = false;
+            if (!IsMouseOver && !_isPointerDown && !OverlayContextMenu.IsOpen)
+            {
+                SetExpandedMode(false);
+            }
             ApplySettingsAndVisuals();
         };
 
@@ -89,10 +93,8 @@ public partial class MainWindow : Window
         _hoverCollapseTimer.Tick += (_, _) =>
         {
             _hoverCollapseTimer.Stop();
-            if (!_isPointerDown && !IsMouseOver && !OverlayContextMenu.IsOpen)
+            if (!_isPointerDown && !IsMouseOver && !OverlayContextMenu.IsOpen && !_isAwaitingInlineConfirm && !_isActionBusy)
             {
-                _isAwaitingInlineConfirm = false;
-                _confirmResetTimer.Stop();
                 SetExpandedMode(false);
                 ApplySettingsAndVisuals();
             }
@@ -405,6 +407,11 @@ public partial class MainWindow : Window
             UpdateLayout();
             _snapService.EvaluateMagneticSnap(applyPosition: true);
         }
+        else if (_isAwaitingInlineConfirm)
+        {
+            // "퇴근?" / "출근?" 확인 대기 중에 배지를 클릭해도 즉시 실행되도록 지원
+            _ = ExecuteClockActionAsync();
+        }
         else if (IsMouseOver)
         {
             SetExpandedMode(true);
@@ -486,8 +493,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        bool targetClockIn = snapshot.Status != WorkStatusKind.Working;
-
         if (!_isAwaitingInlineConfirm)
         {
             _isAwaitingInlineConfirm = true;
@@ -496,6 +501,29 @@ public partial class MainWindow : Window
             _confirmResetTimer.Start();
             return;
         }
+
+        await ExecuteClockActionAsync();
+    }
+
+    private async void OnMenuClockActionClick(object sender, RoutedEventArgs e)
+    {
+        RecordInteraction();
+        await ExecuteClockActionAsync();
+    }
+
+    private async Task ExecuteClockActionAsync()
+    {
+        if (_isActionBusy)
+            return;
+
+        var snapshot = _attendanceService.CurrentSnapshot;
+        if (snapshot.Status == WorkStatusKind.NeedsLogin)
+        {
+            OpenPortalWindow();
+            return;
+        }
+
+        bool targetClockIn = snapshot.Status != WorkStatusKind.Working;
 
         _confirmResetTimer.Stop();
         _isAwaitingInlineConfirm = false;
@@ -530,6 +558,11 @@ public partial class MainWindow : Window
         OverlayContextMenu.Placement = PlacementMode.MousePoint;
         MenuAlwaysOnTop.IsChecked = _settingsService.Current.AlwaysOnTop;
         MenuRunAtStartup.IsChecked = _settingsService.Current.RunAtStartup;
+
+        var status = _attendanceService.CurrentSnapshot.Status;
+        MenuClockActionItem.Header = status == WorkStatusKind.NeedsLogin
+            ? "다우오피스 로그인..."
+            : (status == WorkStatusKind.Working ? "퇴근하기" : "출근하기");
     }
 
     private void OnOpenSettingsClick(object sender, RoutedEventArgs e)
