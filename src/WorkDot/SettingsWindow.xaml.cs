@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using WorkDot.Services;
 
@@ -20,9 +21,17 @@ public partial class SettingsWindow : Window
 
         string version = AppSettingsService.AppVersion;
         VersionBadgeText.Text = version;
-        FooterVersionText.Text = $"WorkDot {version} · AlineStudio";
+        FooterVersionText.Text = $"ALINESTUDIO // {version}";
 
         LoadSettingsIntoUi();
+    }
+
+    private void OnTitleBarMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ButtonState == MouseButtonState.Pressed)
+        {
+            DragMove();
+        }
     }
 
     private void LoadSettingsIntoUi()
@@ -49,7 +58,6 @@ public partial class SettingsWindow : Window
             ScaleValueText.Text = $"{(int)Math.Round(s.WidgetScale * 100)}%";
 
             AlwaysOnTopCheck.IsChecked = s.AlwaysOnTop;
-            ShowInTaskbarCheck.IsChecked = s.ShowInTaskbar;
             RunAtStartupCheck.IsChecked = s.RunAtStartup;
         }
         finally
@@ -58,7 +66,7 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private static void UpdatePreviewColor(System.Windows.Shapes.Ellipse preview, string hex, string fallback)
+    private static void UpdatePreviewColor(System.Windows.Shapes.Rectangle preview, string hex, string fallback)
     {
         var c = AppSettingsService.ParseColorOrDefault(hex, fallback);
         preview.Fill = new SolidColorBrush(c);
@@ -157,13 +165,11 @@ public partial class SettingsWindow : Window
             return;
 
         bool topMost = AlwaysOnTopCheck.IsChecked == true;
-        bool showTaskbar = ShowInTaskbarCheck.IsChecked == true;
         bool startup = RunAtStartupCheck.IsChecked == true;
 
         _settingsService.SaveAndApply(s =>
         {
             s.AlwaysOnTop = topMost;
-            s.ShowInTaskbar = showTaskbar;
             s.RunAtStartup = startup;
         });
     }

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -16,6 +17,7 @@ public partial class MainWindow : Window
     private readonly DaouAttendanceService _attendanceService;
     private readonly TaskbarTrayService _trayService;
     private readonly DispatcherTimer _pollTimer;
+    private readonly DispatcherTimer _confirmResetTimer;
 
     private AttendanceWebWindow? _portalWindow;
     private SettingsWindow? _settingsWindow;
@@ -27,10 +29,14 @@ public partial class MainWindow : Window
     private double _windowStartTop;
     private bool _isMiniDotMode;
     private bool _isActionBusy;
+    private bool _isAwaitingInlineConfirm;
 
     public MainWindow()
     {
         InitializeComponent();
+
+        // 작업 표시줄 표시 영구 비활성화
+        ShowInTaskbar = false;
 
         _settingsService = new AppSettingsService();
         _snapService = new Win32SnapService(this);
@@ -38,12 +44,16 @@ public partial class MainWindow : Window
         _trayService = new TaskbarTrayService();
 
         string ver = AppSettingsService.AppVersion;
-        MenuVersionHeader.Header = $"✨ WorkDot {ver}";
-        InlineVersionText.Text = $" · {ver}";
+        MenuVersionHeader.Header = $"WORKDOT // {ver}";
+        InlineVersionText.Text = $" // {ver}";
 
         _settingsService.SettingsChanged += _ => Dispatcher.Invoke(ApplySettingsAndVisuals);
         _snapService.SnapStateChanged += OnSnapStateChanged;
-        _attendanceService.SnapshotChanged += _ => Dispatcher.Invoke(ApplySettingsAndVisuals);
+        _attendanceService.SnapshotChanged += _ => Dispatcher.Invoke(() =>
+        {
+            _isAwaitingInlineConfirm = false;
+            ApplySettingsAndVisuals();
+        });
 
         WireTrayEvents();
 
@@ -52,6 +62,17 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromSeconds(45)
         };
         _pollTimer.Tick += async (_, _) => await _attendanceService.RefreshStatusAsync();
+
+        _confirmResetTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(3.5)
+        };
+        _confirmResetTimer.Tick += (_, _) =>
+        {
+            _confirmResetTimer.Stop();
+            _isAwaitingInlineConfirm = false;
+            ApplySettingsAndVisuals();
+        };
 
         Loaded += OnMainWindowLoaded;
         Closed += (_, _) =>
@@ -65,33 +86,14 @@ public partial class MainWindow : Window
 
     private void WireTrayEvents()
     {
-        _trayService.ClockActionRequested += () => Dispatcher.Invoke(() =>
-        {
-            EnsureOverlayVisible();
-            OnPrimaryActionClick(this, new RoutedEventArgs());
-        });
-
         _trayService.OpenPortalRequested += () => Dispatcher.Invoke(OpenPortalWindow);
-        _trayService.RefreshRequested += () => Dispatcher.Invoke(async () => await _attendanceService.RefreshStatusAsync());
-        _trayService.OpenSettingsRequested += () => Dispatcher.Invoke(() => OnOpenSettingsClick(this, new RoutedEventArgs()));
         _trayService.ToggleOverlayVisibilityRequested += () => Dispatcher.Invoke(ToggleOverlayVisibility);
-        _trayService.SnapToTaskbarRequested += () => Dispatcher.Invoke(() =>
+        _trayService.TrayContextMenuRequested += () => Dispatcher.Invoke(() =>
         {
-            EnsureOverlayVisible();
-            _snapService.SnapToTaskbarDefault();
+            Activate();
+            OverlayContextMenu.Placement = PlacementMode.MousePoint;
+            OverlayContextMenu.IsOpen = true;
         });
-        _trayService.ToggleMiniModeRequested += () => Dispatcher.Invoke(() =>
-        {
-            EnsureOverlayVisible();
-            ToggleMiniMode();
-        });
-        _trayService.ManualStatusRequested += status => Dispatcher.Invoke(() => _attendanceService.SetManualStatusOverride(status));
-        _trayService.ScaleRequested += scale => Dispatcher.Invoke(() => _settingsService.SaveAndApply(s => s.WidgetScale = scale));
-        _trayService.ThemeRequested += mode => Dispatcher.Invoke(() => _settingsService.SaveAndApply(s => s.ThemeMode = mode));
-        _trayService.AlwaysOnTopChanged += val => Dispatcher.Invoke(() => _settingsService.SaveAndApply(s => s.AlwaysOnTop = val));
-        _trayService.ShowInTaskbarChanged += val => Dispatcher.Invoke(() => _settingsService.SaveAndApply(s => s.ShowInTaskbar = val));
-        _trayService.RunAtStartupChanged += val => Dispatcher.Invoke(() => _settingsService.SaveAndApply(s => s.RunAtStartup = val));
-        _trayService.ExitRequested += () => Dispatcher.Invoke(() => System.Windows.Application.Current.Shutdown());
     }
 
     private async void OnMainWindowLoaded(object sender, RoutedEventArgs e)
@@ -106,7 +108,6 @@ public partial class MainWindow : Window
         _snapService.Initialize();
         _snapService.SnapToTaskbarDefault();
 
-        // MainWindow 밖의 별도 백그라운드 창에서 WebView2를 초기화 (Airspace 가림 문제 원천 방지)
         try
         {
             _portalWindow = new AttendanceWebWindow(_attendanceService);
@@ -115,7 +116,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            SubStatusText.Text = $"WebView2 오류: {ex.Message}";
+            SubStatusText.Text = $"ERR: {ex.Message}";
         }
     }
 
@@ -125,7 +126,7 @@ public partial class MainWindow : Window
         var snapshot = _attendanceService.CurrentSnapshot;
 
         Topmost = settings.AlwaysOnTop;
-        ShowInTaskbar = settings.ShowInTaskbar;
+        ShowInTaskbar = false;
         CapsuleBorder.Opacity = settings.WidgetOpacity;
 
         bool scaleChanged = Math.Abs(CapsuleScaleTransform.ScaleX - settings.WidgetScale) > 0.005;
@@ -135,31 +136,35 @@ public partial class MainWindow : Window
         bool isLightTheme = _settingsService.IsEffectiveLightTheme();
         if (isLightTheme)
         {
-            CapsuleBorder.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F4FFFFFF"));
-            SubStatusText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#475569"));
-            InlineVersionText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#94A3B8"));
+            CapsuleBorder.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F4F4F6"));
+            CapsuleBorder.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#C8C8D2"));
+            ActionPanel.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#D4D4DE"));
 
-            SnapBadge.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E2E8F0"));
-            SnapBadge.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#CBD5E1"));
-            SnapBadgeText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#334155"));
+            SubStatusText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#52525E"));
+            StatusCodeText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#71717A"));
+            InlineVersionText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#8E8E98"));
 
-            ApplyGhostButtonTheme(
-                (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E2E8F0"),
-                (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#334155"));
+            SnapBadge.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E4E4EA"));
+            SnapBadge.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#C8C8D2"));
+            SnapBadgeText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#52525E"));
+
+            ApplyGhostButtonTheme((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#52525E"));
         }
         else
         {
-            CapsuleBorder.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#EE0F172A"));
-            SubStatusText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#94A3B8"));
-            InlineVersionText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#64748B"));
+            CapsuleBorder.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#0A0A0C"));
+            CapsuleBorder.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#282830"));
+            ActionPanel.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#22222A"));
 
-            SnapBadge.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#1E293B"));
-            SnapBadge.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#334155"));
-            SnapBadgeText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#94A3B8"));
+            SubStatusText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#8E8E98"));
+            StatusCodeText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#52525E"));
+            InlineVersionText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#464652"));
 
-            ApplyGhostButtonTheme(
-                (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#1E293B"),
-                (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#CBD5E1"));
+            SnapBadge.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#141418"));
+            SnapBadge.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#2A2A34"));
+            SnapBadgeText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#71717A"));
+
+            ApplyGhostButtonTheme((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#8E8E98"));
         }
 
         System.Windows.Media.Color workingColor = AppSettingsService.ParseColorOrDefault(settings.WorkingColorHex, "#10B981");
@@ -167,55 +172,59 @@ public partial class MainWindow : Window
 
         bool isWorking = snapshot.Status == WorkStatusKind.Working;
         System.Windows.Media.Color activeStatusColor = isWorking ? workingColor : offWorkColor;
-        System.Windows.Media.Color activeBorderColor = System.Windows.Media.Color.FromArgb(
-            150, activeStatusColor.R, activeStatusColor.G, activeStatusColor.B);
         var activeBrush = new SolidColorBrush(activeStatusColor);
 
+        StatusAccentBar.Fill = activeBrush;
         StatusCoreDot.Fill = activeBrush;
-        PulseRing.Fill = activeBrush;
-        DotGlow.Color = activeStatusColor;
-        CapsuleGlow.Color = activeStatusColor;
-        CapsuleBorder.BorderBrush = new SolidColorBrush(activeBorderColor);
+        PulseRing.Stroke = activeBrush;
 
         StatusTitleText.Text = isWorking ? "근무중" : "퇴근";
         StatusTitleText.Foreground = activeBrush;
-        SubStatusText.Text = snapshot.SubText;
+        StatusCodeText.Text = snapshot.Status == WorkStatusKind.NeedsLogin
+            ? "AUTH-REQ"
+            : (isWorking ? "ON-DUTY" : "OFF-DUTY");
 
-        Title = $"WorkDot · {(isWorking ? "근무중" : "퇴근")}";
-        WindowTaskbarInfo.Description = $"WorkDot {AppSettingsService.AppVersion} · {(isWorking ? "근무중" : "퇴근")} ({snapshot.SubText})";
+        if (!_isAwaitingInlineConfirm)
+        {
+            SubStatusText.Text = snapshot.SubText;
+        }
 
         if (snapshot.Status == WorkStatusKind.NeedsLogin)
         {
+            var amber = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F59E0B");
             PrimaryActionButton.Content = "로그인";
-            PrimaryActionButton.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F59E0B"));
-            PrimaryActionButton.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#1E293B"));
-            PrimaryActionButton.ToolTip = "클릭하여 다우오피스에 로그인합니다";
-            ThumbClockActionBtn.Description = "다우오피스 로그인";
+            PrimaryActionButton.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(30, amber.R, amber.G, amber.B));
+            PrimaryActionButton.BorderBrush = new SolidColorBrush(amber);
+            PrimaryActionButton.Foreground = new SolidColorBrush(amber);
+            PrimaryActionButton.ToolTip = "다우오피스 로그인 창 열기";
+        }
+        else if (_isAwaitingInlineConfirm)
+        {
+            System.Windows.Media.Color actionColor = isWorking ? offWorkColor : workingColor;
+            PrimaryActionButton.Content = isWorking ? "퇴근 확인" : "출근 확인";
+            PrimaryActionButton.Background = new SolidColorBrush(actionColor);
+            PrimaryActionButton.BorderBrush = new SolidColorBrush(actionColor);
+            PrimaryActionButton.Foreground = GetContrastingTextBrush(actionColor);
         }
         else if (isWorking)
         {
-            PrimaryActionButton.Content = "퇴근하기";
-            PrimaryActionButton.Background = new SolidColorBrush(offWorkColor);
-            PrimaryActionButton.Foreground = GetContrastingTextBrush(offWorkColor);
-            PrimaryActionButton.ToolTip = "클릭하여 퇴근 처리를 진행합니다";
-            ThumbClockActionBtn.Description = "지금 퇴근 처리하기";
+            PrimaryActionButton.Content = "퇴근";
+            PrimaryActionButton.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(26, offWorkColor.R, offWorkColor.G, offWorkColor.B));
+            PrimaryActionButton.BorderBrush = new SolidColorBrush(offWorkColor);
+            PrimaryActionButton.Foreground = new SolidColorBrush(offWorkColor);
+            PrimaryActionButton.ToolTip = "클릭하여 퇴근 처리";
         }
         else
         {
-            PrimaryActionButton.Content = "출근하기";
-            PrimaryActionButton.Background = new SolidColorBrush(workingColor);
-            PrimaryActionButton.Foreground = GetContrastingTextBrush(workingColor);
-            PrimaryActionButton.ToolTip = "클릭하여 출근 처리를 진행합니다";
-            ThumbClockActionBtn.Description = "지금 출근 처리하기";
+            PrimaryActionButton.Content = "출근";
+            PrimaryActionButton.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(26, workingColor.R, workingColor.G, workingColor.B));
+            PrimaryActionButton.BorderBrush = new SolidColorBrush(workingColor);
+            PrimaryActionButton.Foreground = new SolidColorBrush(workingColor);
+            PrimaryActionButton.ToolTip = "클릭하여 출근 처리";
         }
 
-        ImageSource dynamicIcon = _trayService.UpdateTrayAndWindowIcon(
-            snapshot,
-            settings,
-            activeStatusColor,
-            Visibility == Visibility.Visible);
+        ImageSource dynamicIcon = _trayService.UpdateTrayAndWindowIcon(snapshot, activeStatusColor);
         Icon = dynamicIcon;
-        ThumbClockActionBtn.ImageSource = dynamicIcon;
 
         if (scaleChanged && IsLoaded)
         {
@@ -237,7 +246,6 @@ public partial class MainWindow : Window
         {
             EnsureOverlayVisible();
         }
-        ApplySettingsAndVisuals();
     }
 
     private void EnsureOverlayVisible()
@@ -253,24 +261,19 @@ public partial class MainWindow : Window
         Activate();
     }
 
-    private void ApplyGhostButtonTheme(System.Windows.Media.Color bg, System.Windows.Media.Color fg)
+    private void ApplyGhostButtonTheme(System.Windows.Media.Color fg)
     {
-        var bgBrush = new SolidColorBrush(bg);
         var fgBrush = new SolidColorBrush(fg);
-
-        PortalIconButton.Background = bgBrush;
         PortalIconButton.Foreground = fgBrush;
-        RefreshIconButton.Background = bgBrush;
         RefreshIconButton.Foreground = fgBrush;
-        SettingsIconButton.Background = bgBrush;
         SettingsIconButton.Foreground = fgBrush;
     }
 
     private static SolidColorBrush GetContrastingTextBrush(System.Windows.Media.Color bg)
     {
         double luminance = (0.299 * bg.R + 0.587 * bg.G + 0.114 * bg.B) / 255.0;
-        return luminance > 0.62
-            ? new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#0F172A"))
+        return luminance > 0.55
+            ? new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#0A0A0C"))
             : System.Windows.Media.Brushes.White;
     }
 
@@ -285,8 +288,8 @@ public partial class MainWindow : Window
             else
             {
                 SnapBadge.Visibility = Visibility.Visible;
-                SnapBadgeText.Text = $"🧲 {snapInfo.TargetTitle}";
-                SnapBadge.ToolTip = $"'{snapInfo.TargetTitle}' 창 경계에 스냅되어 함께 이동합니다";
+                SnapBadgeText.Text = snapInfo.TargetTitle;
+                SnapBadge.ToolTip = $"DOCKED // {snapInfo.TargetTitle}";
             }
         });
     }
@@ -393,13 +396,11 @@ public partial class MainWindow : Window
         {
             InfoPanel.Visibility = Visibility.Collapsed;
             ActionPanel.Visibility = Visibility.Collapsed;
-            CapsuleBorder.Padding = new Thickness(8);
         }
         else
         {
             InfoPanel.Visibility = Visibility.Visible;
             ActionPanel.Visibility = Visibility.Visible;
-            CapsuleBorder.Padding = new Thickness(12, 8, 12, 8);
         }
 
         UpdateLayout();
@@ -418,7 +419,7 @@ public partial class MainWindow : Window
     }
 
     // -------------------------------------------------------------------------
-    // 출근 / 퇴근 원클릭 액션, 설정 창, 작업표시줄 & 컨텍스트 메뉴 핸들러
+    // 인라인 2단계 출근 / 퇴근 처리 (Windows MessageBox 팝업 제거)
     // -------------------------------------------------------------------------
     private async void OnPrimaryActionClick(object sender, RoutedEventArgs e)
     {
@@ -436,23 +437,27 @@ public partial class MainWindow : Window
         bool targetClockIn = snapshot.Status != WorkStatusKind.Working;
         string actionName = targetClockIn ? "출근" : "퇴근";
 
-        var confirm = System.Windows.MessageBox.Show(
-            this,
-            $"다우오피스에 [{actionName}] 처리를 진행할까요?\n\n• 확인을 누르면 그룹웨어 {actionName} 버튼을 자동으로 실행합니다.",
-            $"WorkDot · {actionName} 확인",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
-
-        if (confirm != MessageBoxResult.Yes)
+        // 1단계 클릭: 버튼 자체에서 인라인 확인 상태로 전환 (구형 MessageBox 미사용)
+        if (!_isAwaitingInlineConfirm)
+        {
+            _isAwaitingInlineConfirm = true;
+            SubStatusText.Text = $"한 번 더 누르면 [{actionName}] 실행";
+            ApplySettingsAndVisuals();
+            _confirmResetTimer.Stop();
+            _confirmResetTimer.Start();
             return;
+        }
 
+        // 2단계 클릭: 즉시 실행
+        _confirmResetTimer.Stop();
+        _isAwaitingInlineConfirm = false;
         _isActionBusy = true;
         PrimaryActionButton.IsEnabled = false;
         SubStatusText.Text = $"{actionName} 처리 요청 중...";
 
         try
         {
-            var (success, message) = await _attendanceService.TriggerClockActionAsync(targetClockIn);
+            var (success, _) = await _attendanceService.TriggerClockActionAsync(targetClockIn);
             if (success)
             {
                 _attendanceService.SetManualStatusOverride(targetClockIn ? WorkStatusKind.Working : WorkStatusKind.OffWork);
@@ -460,51 +465,22 @@ public partial class MainWindow : Window
             }
             else
             {
-                SubStatusText.Text = "그룹웨어 창에서 확인 필요";
-                var openPortal = System.Windows.MessageBox.Show(
-                    this,
-                    $"{message}\n\n지금 다우오피스 근태 창을 열까요?",
-                    "WorkDot 안내",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Information);
-
-                if (openPortal == MessageBoxResult.Yes)
-                {
-                    OpenPortalWindow();
-                }
+                SubStatusText.Text = "포털 창에서 직접 확인 필요";
+                OpenPortalWindow();
             }
         }
         finally
         {
             PrimaryActionButton.IsEnabled = true;
             _isActionBusy = false;
+            ApplySettingsAndVisuals();
         }
-    }
-
-    private void OnThumbClockActionClick(object sender, EventArgs e)
-    {
-        OnPrimaryActionClick(this, new RoutedEventArgs());
-    }
-
-    private void OnThumbOpenPortalClick(object sender, EventArgs e)
-    {
-        OpenPortalWindow();
-    }
-
-    private async void OnThumbRefreshClick(object sender, EventArgs e)
-    {
-        await _attendanceService.RefreshStatusAsync();
-    }
-
-    private void OnThumbSettingsClick(object sender, EventArgs e)
-    {
-        OnOpenSettingsClick(this, new RoutedEventArgs());
     }
 
     private void OnContextMenuOpened(object sender, RoutedEventArgs e)
     {
+        OverlayContextMenu.Placement = PlacementMode.MousePoint;
         MenuAlwaysOnTop.IsChecked = _settingsService.Current.AlwaysOnTop;
-        MenuShowInTaskbar.IsChecked = _settingsService.Current.ShowInTaskbar;
         MenuRunAtStartup.IsChecked = _settingsService.Current.RunAtStartup;
     }
 
@@ -525,12 +501,6 @@ public partial class MainWindow : Window
     {
         bool next = MenuAlwaysOnTop.IsChecked;
         _settingsService.SaveAndApply(s => s.AlwaysOnTop = next);
-    }
-
-    private void OnMenuShowInTaskbarClick(object sender, RoutedEventArgs e)
-    {
-        bool next = MenuShowInTaskbar.IsChecked;
-        _settingsService.SaveAndApply(s => s.ShowInTaskbar = next);
     }
 
     private void OnMenuRunAtStartupClick(object sender, RoutedEventArgs e)
@@ -561,7 +531,7 @@ public partial class MainWindow : Window
 
     private async void OnRefreshClick(object sender, RoutedEventArgs e)
     {
-        SubStatusText.Text = "동기화 중...";
+        SubStatusText.Text = "SYNCING...";
         await _attendanceService.RefreshStatusAsync();
     }
 

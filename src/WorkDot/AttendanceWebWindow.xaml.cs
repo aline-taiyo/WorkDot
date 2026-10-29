@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Input;
 using WorkDot.Services;
 
 namespace WorkDot;
@@ -17,10 +18,6 @@ public partial class AttendanceWebWindow : Window
         Closing += OnWindowClosing;
     }
 
-    /// <summary>
-    /// 앱 시작 시 화면에 보이지 않는 백그라운드 상태로 WebView2를 초기화합니다.
-    /// (MainWindow 내부에 WebView2를 두지 않아 Airspace 가림 문제를 원천 제거)
-    /// </summary>
     public async Task InitializeInBackgroundAsync()
     {
         if (_isWebViewInitialized)
@@ -45,7 +42,7 @@ public partial class AttendanceWebWindow : Window
         await EnsureWebViewReadyAsync();
 
         Opacity = 1.0;
-        ShowInTaskbar = true;
+        ShowInTaskbar = false;
         ShowActivated = true;
         if (Left < -1000 || Top < -1000)
         {
@@ -69,6 +66,20 @@ public partial class AttendanceWebWindow : Window
         Close();
     }
 
+    private void OnTitleBarMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2)
+        {
+            WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+            return;
+        }
+
+        if (e.ButtonState == MouseButtonState.Pressed)
+        {
+            DragMove();
+        }
+    }
+
     private async Task EnsureWebViewReadyAsync()
     {
         if (_isWebViewInitialized)
@@ -88,9 +99,7 @@ public partial class AttendanceWebWindow : Window
         if (_isAppShuttingDown)
             return;
 
-        // 창을 닫아도 WebView2 세션과 백그라운드 동기화가 유지되도록 숨김 처리
         e.Cancel = true;
-        ShowInTaskbar = false;
         Hide();
         _ = _attendanceService.RefreshStatusAsync();
     }
@@ -137,7 +146,6 @@ public partial class AttendanceWebWindow : Window
         {
             await _attendanceService.ProbeDomAndApiStatusAsync(PortalWebView.CoreWebView2);
         }
-        ShowInTaskbar = false;
         Hide();
     }
 }
