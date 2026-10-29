@@ -1,9 +1,5 @@
 using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Runtime.InteropServices;
-using System.Windows;
 using System.Windows.Forms;
-using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
@@ -11,9 +7,12 @@ namespace WorkDot.Services;
 
 public sealed class TaskbarTrayService : IDisposable
 {
+    private static readonly Uri AppIconPackUri =
+        new("pack://application:,,,/WorkDot;component/Assets/Icons/workdot.ico", UriKind.Absolute);
+
     private readonly NotifyIcon _notifyIcon;
-    private Icon? _currentIcon;
-    private IntPtr _currentHIcon;
+    private readonly Icon _appTrayIcon;
+    private readonly ImageSource _wpfAppIcon;
 
     public event Action? OpenPortalRequested;
     public event Action? ToggleOverlayVisibilityRequested;
@@ -21,13 +20,12 @@ public sealed class TaskbarTrayService : IDisposable
 
     public TaskbarTrayService()
     {
-        var (initIcon, initHIcon, _) = CreateModernTrayIcon(System.Drawing.Color.FromArgb(255, 239, 68, 68));
-        _currentIcon = initIcon;
-        _currentHIcon = initHIcon;
+        _appTrayIcon = LoadEmbeddedAppIcon();
+        _wpfAppIcon = LoadWpfAppIcon();
 
         _notifyIcon = new NotifyIcon
         {
-            Icon = _currentIcon,
+            Icon = _appTrayIcon,
             Text = $"WorkDot {AppSettingsService.AppVersion}",
             Visible = true
         };
@@ -55,92 +53,50 @@ public sealed class TaskbarTrayService : IDisposable
 
         string tooltip = $"WorkDot ({stateText}) · {snapshot.SubText}";
         _notifyIcon.Text = tooltip.Length > 60 ? tooltip[..60] : tooltip;
-
-        var drawColor = System.Drawing.Color.FromArgb(
-            activeMediaColor.A,
-            activeMediaColor.R,
-            activeMediaColor.G,
-            activeMediaColor.B);
-
-        var (newIcon, newHIcon, wpfImage) = CreateModernTrayIcon(drawColor);
-        var prevIcon = _currentIcon;
-        var prevHIcon = _currentHIcon;
-
-        _currentIcon = newIcon;
-        _currentHIcon = newHIcon;
-        _notifyIcon.Icon = newIcon;
+        _notifyIcon.Icon = _appTrayIcon;
         _notifyIcon.Visible = true;
 
-        prevIcon?.Dispose();
-        if (prevHIcon != IntPtr.Zero)
-        {
-            DestroyIcon(prevHIcon);
-        }
-
-        return wpfImage;
+        return _wpfAppIcon;
     }
 
-    private static (Icon TrayIcon, IntPtr HIcon, ImageSource WpfIcon) CreateModernTrayIcon(System.Drawing.Color signalColor)
+    private static Icon LoadEmbeddedAppIcon()
     {
-        using var bmp = new Bitmap(32, 32);
-        using (var g = Graphics.FromImage(bmp))
+        try
         {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(System.Drawing.Color.Transparent);
-
-            using var path = CreateRoundedRectPath(new Rectangle(2, 2, 28, 28), 8);
-            using var bgBrush = new SolidBrush(System.Drawing.Color.FromArgb(255, 9, 9, 11));
-            g.FillPath(bgBrush, path);
-
-            using var borderPen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(255, 39, 39, 42), 1.5f);
-            g.DrawPath(borderPen, path);
-
-            using var haloBrush = new SolidBrush(System.Drawing.Color.FromArgb(55, signalColor));
-            g.FillEllipse(haloBrush, 7, 7, 18, 18);
-
-            using var coreBrush = new SolidBrush(signalColor);
-            g.FillEllipse(coreBrush, 10, 10, 12, 12);
+            var streamInfo = System.Windows.Application.GetResourceStream(AppIconPackUri);
+            if (streamInfo?.Stream != null)
+            {
+                using var s = streamInfo.Stream;
+                return new Icon(s, new System.Drawing.Size(32, 32));
+            }
+        }
+        catch
+        {
+            // Fallback below
         }
 
-        IntPtr hIcon = bmp.GetHicon();
-        Icon icon = Icon.FromHandle(hIcon);
+        string exePath = Environment.ProcessPath ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(exePath))
+        {
+            var extracted = Icon.ExtractAssociatedIcon(exePath);
+            if (extracted != null)
+                return extracted;
+        }
 
-        ImageSource wpfIcon = Imaging.CreateBitmapSourceFromHIcon(
-            hIcon,
-            Int32Rect.Empty,
-            BitmapSizeOptions.FromEmptyOptions());
-        wpfIcon.Freeze();
-
-        return (icon, hIcon, wpfIcon);
+        return SystemIcons.Application;
     }
 
-    private static GraphicsPath CreateRoundedRectPath(Rectangle bounds, int radius)
+    private static ImageSource LoadWpfAppIcon()
     {
-        int d = radius * 2;
-        var path = new GraphicsPath();
-        path.AddArc(bounds.X, bounds.Y, d, d, 180, 90);
-        path.AddArc(bounds.Right - d, bounds.Y, d, d, 270, 90);
-        path.AddArc(bounds.Right - d, bounds.Bottom - d, d, d, 0, 90);
-        path.AddArc(bounds.X, bounds.Bottom - d, d, d, 90, 90);
-        path.CloseFigure();
-        return path;
+        var frame = BitmapFrame.Create(AppIconPackUri);
+        frame.Freeze();
+        return frame;
     }
 
     public void Dispose()
     {
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
-
-        _currentIcon?.Dispose();
-        _currentIcon = null;
-
-        if (_currentHIcon != IntPtr.Zero)
-        {
-            DestroyIcon(_currentHIcon);
-            _currentHIcon = IntPtr.Zero;
-        }
+        _appTrayIcon.Dispose();
     }
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool DestroyIcon(IntPtr hIcon);
 }

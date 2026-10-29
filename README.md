@@ -1,4 +1,4 @@
-# WorkDot
+# <img src="src/WorkDot/Assets/Icons/workdot-256.png" width="34" height="34" align="absmiddle" alt="WorkDot Icon"/> WorkDot
 
 다우오피스(DaouOffice) 근태 현황을 실시간으로 동기화하고 화면 경계에 깔끔하게 고정해 사용하는 Windows 미니 오버레이 위젯입니다.
 
@@ -13,7 +13,7 @@
 1. [GitHub Releases](https://github.com/aline-taiyo/WorkDot/releases/latest)에서 **`WorkDot-Setup-win-x64.msi`** 설치 파일을 다운로드하여 실행합니다.
    - 설치 완료 시 바탕화면 및 시작 메뉴에 **WorkDot** 바로가기 아이콘이 생성됩니다 (`%LOCALAPPDATA%\Programs\WorkDot\WorkDot.exe`).
 2. `WorkDot`을 실행하면 화면 우측 하단(작업 표시줄 위 경계)에 미니 위젯이 표시됩니다.
-   - 작업 표시줄에는 아이콘이 노출되지 않으며, **시스템 트레이(트레이 아이콘)** 및 오버레이 위젯으로만 동작합니다.
+   - 작업 표시줄에는 아이콘이 노출되지 않으며, **시스템 트레이(WorkDot 앱 아이콘)** 및 오버레이 위젯으로만 동작합니다.
 3. 최초 실행 시(또는 로그인이 필요한 경우):
    - 위젯에 마우스를 올려 확장된 아이콘 바에서 **홈(브라우저 열기)** 버튼을 클릭하거나, 위젯 우클릭 메뉴에서 **`브라우저 열기`**를 선택합니다.
    - 내장된 다우오피스 창에서 **1회 로그인**하면 세션 쿠키와 계정 정보가 Windows DPAPI로 안전하게 암호화 저장되어 이후 재실행 시에도 자동으로 로그인·동기화됩니다.
@@ -21,6 +21,12 @@
 ---
 
 ## 2. 위젯 화면 구성 및 표시 방식
+
+### 기본 미니 모드 & 10초 미조작 시 실근무 시간 표시
+![위젯 미니 모드 및 실근무 시간 표시](docs/screenshots/widget-mini.png)
+
+### 마우스 호버 확장 모드 & 퇴근 확인 팝업
+![위젯 확장 모드 및 퇴근 확인 팝업](docs/screenshots/widget-expanded.png)
 
 | 상태 / 모드 | 동작 설명 |
 | --- | --- |
@@ -68,6 +74,8 @@
 
 ## 5. 환경설정 및 자동 업데이트
 
+<img src="docs/screenshots/settings-window.png" width="440" alt="WorkDot 환경설정 창"/>
+
 위젯의 **톱니바퀴(환경설정)** 아이콘을 클릭하여 다음 항목을 설정할 수 있습니다 (`%LOCALAPPDATA%\WorkDot\settings.json`에 자동 저장).
 
 - **테마 모드**: `Windows 시스템 설정 따름` / `다크 모드` / `라이트 모드`
@@ -76,7 +84,7 @@
 - **실행 및 업데이트**:
   - `항상 위에 표시 (Topmost)`
   - `Windows 시작 시 자동 실행`
-  - **`최신 릴리즈 자동 업데이트`**: 활성화 시 앱 시작 및 주기적으로 GitHub 최신 Release를 확인하여 새 버전이 있으면 자동 설치 후 재시작
+  - **`최신 릴리즈 자동 업데이트`**: 활성화 시 앱 시작 및 주기적으로 GitHub 최신 Release(`.msi`)를 확인하여 새 버전이 있으면 자동 설치 후 재시작
   - **`업데이트 확인` / `저장소 열기`**: 수동으로 최신 릴리즈를 즉시 확인하거나 GitHub 저장소를 브라우저에서 열기
 
 ---

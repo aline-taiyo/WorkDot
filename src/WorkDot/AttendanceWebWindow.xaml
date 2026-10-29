@@ -4,7 +4,7 @@
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         Title="다우오피스 근태 현황"
-        Icon="pack://application:,,,/Assets/Icons/workdot.ico"
+        Icon="pack://application:,,,/WorkDot;component/Assets/Icons/workdot.ico"
         Width="1120" Height="780"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
