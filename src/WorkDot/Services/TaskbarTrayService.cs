@@ -21,14 +21,14 @@ public sealed class TaskbarTrayService : IDisposable
 
     public TaskbarTrayService()
     {
-        var (initIcon, initHIcon, _) = CreateSharpTechIcon(System.Drawing.Color.FromArgb(255, 239, 68, 68));
+        var (initIcon, initHIcon, _) = CreateModernTrayIcon(System.Drawing.Color.FromArgb(255, 239, 68, 68));
         _currentIcon = initIcon;
         _currentHIcon = initHIcon;
 
         _notifyIcon = new NotifyIcon
         {
             Icon = _currentIcon,
-            Text = $"WORKDOT // {AppSettingsService.AppVersion}",
+            Text = $"WorkDot {AppSettingsService.AppVersion}",
             Visible = true
         };
 
@@ -51,9 +51,9 @@ public sealed class TaskbarTrayService : IDisposable
         System.Windows.Media.Color activeMediaColor)
     {
         bool isWorking = snapshot.Status == WorkStatusKind.Working;
-        string stateText = isWorking ? "ON-DUTY" : "OFF-DUTY";
+        string stateText = isWorking ? "근무중" : "퇴근";
 
-        string tooltip = $"WORKDOT [{stateText}] {snapshot.SubText}";
+        string tooltip = $"WorkDot ({stateText}) · {snapshot.SubText}";
         _notifyIcon.Text = tooltip.Length > 60 ? tooltip[..60] : tooltip;
 
         var drawColor = System.Drawing.Color.FromArgb(
@@ -62,7 +62,7 @@ public sealed class TaskbarTrayService : IDisposable
             activeMediaColor.G,
             activeMediaColor.B);
 
-        var (newIcon, newHIcon, wpfImage) = CreateSharpTechIcon(drawColor);
+        var (newIcon, newHIcon, wpfImage) = CreateModernTrayIcon(drawColor);
         var prevIcon = _currentIcon;
         var prevHIcon = _currentHIcon;
 
@@ -80,30 +80,26 @@ public sealed class TaskbarTrayService : IDisposable
         return wpfImage;
     }
 
-    /// <summary>
-    /// Mono Tech Sharp 스타일의 정사각형 기술 인디케이터 트레이 아이콘을 생성합니다.
-    /// </summary>
-    private static (Icon TrayIcon, IntPtr HIcon, ImageSource WpfIcon) CreateSharpTechIcon(System.Drawing.Color signalColor)
+    private static (Icon TrayIcon, IntPtr HIcon, ImageSource WpfIcon) CreateModernTrayIcon(System.Drawing.Color signalColor)
     {
         using var bmp = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(bmp))
         {
-            g.SmoothingMode = SmoothingMode.None;
-            g.InterpolationMode = InterpolationMode.NearestNeighbor;
-            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(System.Drawing.Color.Transparent);
 
-            // 1. 카본 블랙 정사각 베이스
-            using var bgBrush = new SolidBrush(System.Drawing.Color.FromArgb(255, 10, 10, 12));
-            g.FillRectangle(bgBrush, 2, 2, 28, 28);
+            using var path = CreateRoundedRectPath(new Rectangle(2, 2, 28, 28), 8);
+            using var bgBrush = new SolidBrush(System.Drawing.Color.FromArgb(255, 9, 9, 11));
+            g.FillPath(bgBrush, path);
 
-            // 2. 외곽 1px 테크니컬 보더 프레임
-            using var outerPen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(200, signalColor), 2f);
-            g.DrawRectangle(outerPen, 3, 3, 26, 26);
+            using var borderPen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(255, 39, 39, 42), 1.5f);
+            g.DrawPath(borderPen, path);
 
-            // 3. 중앙 정사각 시그널 코어
+            using var haloBrush = new SolidBrush(System.Drawing.Color.FromArgb(55, signalColor));
+            g.FillEllipse(haloBrush, 7, 7, 18, 18);
+
             using var coreBrush = new SolidBrush(signalColor);
-            g.FillRectangle(coreBrush, 10, 10, 12, 12);
+            g.FillEllipse(coreBrush, 10, 10, 12, 12);
         }
 
         IntPtr hIcon = bmp.GetHicon();
@@ -116,6 +112,18 @@ public sealed class TaskbarTrayService : IDisposable
         wpfIcon.Freeze();
 
         return (icon, hIcon, wpfIcon);
+    }
+
+    private static GraphicsPath CreateRoundedRectPath(Rectangle bounds, int radius)
+    {
+        int d = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(bounds.X, bounds.Y, d, d, 180, 90);
+        path.AddArc(bounds.Right - d, bounds.Y, d, d, 270, 90);
+        path.AddArc(bounds.Right - d, bounds.Bottom - d, d, d, 0, 90);
+        path.AddArc(bounds.X, bounds.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 
     public void Dispose()

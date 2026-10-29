@@ -2,39 +2,39 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!-- =================================================================== -->
-    <!-- MONO TECH SHARP DESIGN SYSTEM                                       -->
-    <!-- Zero rounded pills, 0px sharp corners, 1px hairline grid,           -->
-    <!-- Monospace technical typography, crisp geometric vector icons        -->
+    <!-- SHADCN/UI & TAILWIND ZINC DESIGN SYSTEM (Modern React Style)        -->
     <!-- =================================================================== -->
 
-    <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas, Segoe UI</FontFamily>
+    <FontFamily x:Key="SansFont">Pretendard, Segoe UI Variable Display, Malgun Gothic, Segoe UI</FontFamily>
+    <FontFamily x:Key="MonoFont">JetBrains Mono, Cascadia Code, Consolas, Segoe UI</FontFamily>
 
-    <!-- 1. Sharp Geometric Vector Icons (12x12 / 14x14 Orthogonal Paths) -->
-    <!-- External Portal (Sharp Box + Diagonal Arrow) -->
-    <Geometry x:Key="GeomExternal">M 7,1 L 12,1 L 12,6 M 12,1 L 6,7 M 5,2 L 1,2 L 1,12 L 11,12 L 11,8</Geometry>
-    <!-- Sync / Refresh (Angular Technical Loop) -->
-    <Geometry x:Key="GeomRefresh">M 11,4 L 11,1 L 8,1 M 11,3.5 A 5,5 0 1 0 11.5,7.5</Geometry>
-    <!-- Settings (Technical Sliders) -->
-    <Geometry x:Key="GeomSettings">M 1,3.5 L 7,3.5 M 9,3.5 L 12,3.5 M 8,1.5 L 8,5.5 M 1,9.5 L 3,9.5 M 5,9.5 L 12,9.5 M 4,7.5 L 4,11.5</Geometry>
-    <!-- Snap / Dock Bracket -->
-    <Geometry x:Key="GeomSnap">M 1,4 L 1,1 L 4,1 M 9,1 L 12,1 L 12,4 M 12,9 L 12,12 L 9,12 M 4,12 L 1,12 L 1,9 M 4.5,6.5 L 8.5,6.5</Geometry>
+    <!-- 1. Lucide-style Vector Icons (14x14 ViewBox, Smooth Round Caps) -->
+    <!-- External Link / Globe Portal -->
+    <Geometry x:Key="GeomExternal">M 8,2 L 12,2 L 12,6 M 12,2 L 6.5,7.5 M 6,3 L 3.5,3 C 2.67,3 2,3.67 2,4.5 L 2,10.5 C 2,11.33 2.67,12 3.5,12 L 9.5,12 C 10.33,12 11,11.33 11,10.5 L 11,8</Geometry>
+    <!-- Refresh / Rotate CW -->
+    <Geometry x:Key="GeomRefresh">M 11.5,3.5 A 5,5 0 1 0 12,7 M 11.5,1.2 L 11.5,4 L 8.7,4</Geometry>
+    <!-- Sliders Horizontal (Settings) -->
+    <Geometry x:Key="GeomSettings">M 2,4 L 7.5,4 M 9.5,4 L 12,4 M 8.5,2.5 L 8.5,5.5 M 2,10 L 4.5,10 M 6.5,10 L 12,10 M 5.5,8.5 L 5.5,11.5</Geometry>
+    <!-- Link / Docked -->
+    <Geometry x:Key="GeomSnap">M 5.5,8.5 L 8.5,5.5 M 4.2,6.8 L 3,8 A 2.12,2.12 0 0 0 6,11 L 7.2,9.8 M 9.8,7.2 L 11,6 A 2.12,2.12 0 0 0 8,3 L 6.8,4.2</Geometry>
     <!-- Close (X) -->
-    <Geometry x:Key="GeomClose">M 2.5,2.5 L 10.5,10.5 M 10.5,2.5 L 2.5,10.5</Geometry>
-    <!-- Back Arrow -->
-    <Geometry x:Key="GeomBack">M 8.5,2 L 3.5,6.5 L 8.5,11</Geometry>
-    <!-- Checkmark -->
-    <Geometry x:Key="GeomCheck">M 2,6.5 L 5,9.5 L 11,3</Geometry>
+    <Geometry x:Key="GeomClose">M 3,3 L 11,11 M 11,3 L 3,11</Geometry>
+    <!-- Back Chevron -->
+    <Geometry x:Key="GeomBack">M 8.5,2.5 L 4,7 L 8.5,11.5</Geometry>
+    <!-- Check -->
+    <Geometry x:Key="GeomCheck">M 2.5,7.2 L 5.5,10.2 L 11.5,3.8</Geometry>
 
     <!-- =================================================================== -->
-    <!-- 2. Sharp Action & Icon Buttons (CornerRadius = 0)                   -->
+    <!-- 2. shadcn/ui Button Styles (rounded-md = 6px)                       -->
     <!-- =================================================================== -->
     <Style x:Key="ModernActionBtnStyle" TargetType="Button">
         <Setter Property="Cursor" Value="Hand"/>
-        <Setter Property="FontFamily" Value="{StaticResource MonoFont}"/>
+        <Setter Property="FontFamily" Value="{StaticResource SansFont}"/>
         <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="Padding" Value="10,4"/>
-        <Setter Property="FontSize" Value="11"/>
-        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="Padding" Value="11,5"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="Template">
@@ -44,19 +44,19 @@
                             Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="0"
+                            CornerRadius="6"
                             Padding="{TemplateBinding Padding}">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="Opacity" Value="0.85"/>
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.9"/>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="Bd" Property="Opacity" Value="0.68"/>
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.75"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="Bd" Property="Opacity" Value="0.35"/>
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.45"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -64,14 +64,14 @@
         </Setter>
     </Style>
 
+    <!-- Ghost Icon Button (26x26, rounded-md = 6px) -->
     <Style x:Key="ModernIconBtnStyle" TargetType="Button">
         <Setter Property="Cursor" Value="Hand"/>
-        <Setter Property="Width" Value="24"/>
-        <Setter Property="Height" Value="24"/>
+        <Setter Property="Width" Value="26"/>
+        <Setter Property="Height" Value="26"/>
         <Setter Property="Background" Value="Transparent"/>
-        <Setter Property="Foreground" Value="#8E8E98"/>
-        <Setter Property="BorderBrush" Value="Transparent"/>
-        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Foreground" Value="#A1A1AA"/>
+        <Setter Property="BorderThickness" Value="0"/>
         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="Template">
@@ -79,19 +79,16 @@
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="Bd"
                             Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="0">
+                            CornerRadius="6">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="#1E1E24"/>
-                            <Setter TargetName="Bd" Property="BorderBrush" Value="#34343E"/>
-                            <Setter Property="Foreground" Value="#F4F4F6"/>
+                            <Setter TargetName="Bd" Property="Background" Value="#27272A"/>
+                            <Setter Property="Foreground" Value="#FAFAFA"/>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="#2A2A32"/>
+                            <Setter TargetName="Bd" Property="Background" Value="#3F3F46"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -99,34 +96,35 @@
         </Setter>
     </Style>
 
+    <!-- Window Close Icon Button -->
     <Style x:Key="WindowCloseBtnStyle" TargetType="Button">
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Width" Value="28"/>
         <Setter Property="Height" Value="28"/>
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="Foreground" Value="#71717A"/>
-        <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="Bd"
                             Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="0">
+                            CornerRadius="6">
                         <Path Data="{StaticResource GeomClose}"
                               Stroke="{TemplateBinding Foreground}"
-                              StrokeThickness="1.3"
+                              StrokeThickness="1.5"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              Width="12" Height="12"
+                              Stretch="Uniform"
                               HorizontalAlignment="Center"
                               VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="#FF2A54"/>
-                            <Setter TargetName="Bd" Property="BorderBrush" Value="#FF2A54"/>
-                            <Setter Property="Foreground" Value="#0A0A0C"/>
+                            <Setter TargetName="Bd" Property="Background" Value="#27272A"/>
+                            <Setter Property="Foreground" Value="#FAFAFA"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -135,13 +133,13 @@
     </Style>
 
     <!-- =================================================================== -->
-    <!-- 3. Sharp Segmented Tab RadioButton Style                            -->
+    <!-- 3. shadcn/ui <Tabs> Segmented Control Style                         -->
     <!-- =================================================================== -->
     <Style x:Key="SegmentedRadioStyle" TargetType="RadioButton">
         <Setter Property="Cursor" Value="Hand"/>
-        <Setter Property="FontFamily" Value="{StaticResource MonoFont}"/>
-        <Setter Property="Foreground" Value="#71717A"/>
-        <Setter Property="FontSize" Value="11.5"/>
+        <Setter Property="FontFamily" Value="{StaticResource SansFont}"/>
+        <Setter Property="Foreground" Value="#A1A1AA"/>
+        <Setter Property="FontSize" Value="12"/>
         <Setter Property="FontWeight" Value="Medium"/>
         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
@@ -149,24 +147,19 @@
             <Setter.Value>
                 <ControlTemplate TargetType="RadioButton">
                     <Border x:Name="TabBorder"
-                            Background="#0A0A0C"
-                            BorderBrush="#24242C"
-                            BorderThickness="1"
-                            CornerRadius="0"
-                            Padding="10,6"
-                            Margin="0,0,-1,0">
+                            Background="Transparent"
+                            CornerRadius="6"
+                            Padding="10,6">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Foreground" Value="#D4D4D8"/>
+                            <Setter Property="Foreground" Value="#E4E4E7"/>
                         </Trigger>
                         <Trigger Property="IsChecked" Value="True">
-                            <Setter TargetName="TabBorder" Property="Background" Value="#1E1E24"/>
-                            <Setter TargetName="TabBorder" Property="BorderBrush" Value="#52525E"/>
-                            <Setter TargetName="TabBorder" Property="Panel.ZIndex" Value="2"/>
+                            <Setter TargetName="TabBorder" Property="Background" Value="#27272A"/>
                             <Setter Property="Foreground" Value="#FAFAFA"/>
-                            <Setter Property="FontWeight" Value="Bold"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -175,13 +168,13 @@
     </Style>
 
     <!-- =================================================================== -->
-    <!-- 4. Sharp Mechanical Toggle Switch Style (No Circles!)               -->
+    <!-- 4. shadcn/ui <Switch> Component Style                               -->
     <!-- =================================================================== -->
     <Style x:Key="ModernToggleSwitchStyle" TargetType="CheckBox">
         <Setter Property="Cursor" Value="Hand"/>
-        <Setter Property="FontFamily" Value="{StaticResource MonoFont}"/>
-        <Setter Property="Foreground" Value="#D4D4D8"/>
-        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="FontFamily" Value="{StaticResource SansFont}"/>
+        <Setter Property="Foreground" Value="#FAFAFA"/>
+        <Setter Property="FontSize" Value="13"/>
         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="Template">
@@ -197,30 +190,27 @@
 
                         <Border x:Name="SwitchTrack"
                                 Grid.Column="1"
-                                Width="36" Height="18"
-                                CornerRadius="0"
-                                Background="#0A0A0C"
-                                BorderBrush="#34343E"
-                                BorderThickness="1"
+                                Width="36" Height="20"
+                                CornerRadius="10"
+                                Background="#27272A"
                                 VerticalAlignment="Center">
-                            <Rectangle x:Name="SwitchThumb"
-                                       Width="14" Height="12"
-                                       Fill="#52525E"
-                                       HorizontalAlignment="Left"
-                                       VerticalAlignment="Center"
-                                       Margin="2,0,0,0"/>
+                            <Ellipse x:Name="SwitchThumb"
+                                     Width="16" Height="16"
+                                     Fill="#A1A1AA"
+                                     HorizontalAlignment="Left"
+                                     VerticalAlignment="Center"
+                                     Margin="2,0,0,0"/>
                         </Border>
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsChecked" Value="True">
-                            <Setter TargetName="SwitchTrack" Property="Background" Value="#1410B981"/>
-                            <Setter TargetName="SwitchTrack" Property="BorderBrush" Value="#10B981"/>
-                            <Setter TargetName="SwitchThumb" Property="Fill" Value="#10B981"/>
+                            <Setter TargetName="SwitchTrack" Property="Background" Value="#FAFAFA"/>
+                            <Setter TargetName="SwitchThumb" Property="Fill" Value="#09090B"/>
                             <Setter TargetName="SwitchThumb" Property="HorizontalAlignment" Value="Right"/>
                             <Setter TargetName="SwitchThumb" Property="Margin" Value="0,0,2,0"/>
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="SwitchTrack" Property="BorderBrush" Value="#71717A"/>
+                            <Setter TargetName="SwitchTrack" Property="Opacity" Value="0.9"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -229,28 +219,27 @@
     </Style>
 
     <!-- =================================================================== -->
-    <!-- 5. Sharp Technical Slider Style                                     -->
+    <!-- 5. shadcn/ui <Slider> Component Style                               -->
     <!-- =================================================================== -->
     <Style x:Key="ModernSliderThumbStyle" TargetType="Thumb">
-        <Setter Property="Width" Value="10"/>
+        <Setter Property="Width" Value="16"/>
         <Setter Property="Height" Value="16"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Thumb">
-                    <Border x:Name="ThumbBd"
-                            Width="10" Height="16"
-                            CornerRadius="0"
-                            Background="#FAFAFA"
-                            BorderBrush="#0A0A0C"
-                            BorderThickness="1"/>
+                    <Ellipse x:Name="ThumbCircle"
+                             Width="16" Height="16"
+                             Fill="#09090B"
+                             Stroke="#FAFAFA"
+                             StrokeThickness="2"/>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="ThumbBd" Property="Background" Value="#10B981"/>
+                            <Setter TargetName="ThumbCircle" Property="Fill" Value="#27272A"/>
                         </Trigger>
                         <Trigger Property="IsDragging" Value="True">
-                            <Setter TargetName="ThumbBd" Property="Background" Value="#10B981"/>
+                            <Setter TargetName="ThumbCircle" Property="Fill" Value="#FAFAFA"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -266,7 +255,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="Slider">
                     <Grid VerticalAlignment="Center">
-                        <Border Height="2" CornerRadius="0" Background="#2A2A32" VerticalAlignment="Center"/>
+                        <Border Height="6" CornerRadius="3" Background="#27272A" VerticalAlignment="Center"/>
                         <Track x:Name="PART_Track">
                             <Track.DecreaseRepeatButton>
                                 <RepeatButton Command="Slider.DecreaseLarge" Opacity="0" Focusable="False"/>
@@ -285,16 +274,16 @@
     </Style>
 
     <!-- =================================================================== -->
-    <!-- 6. Sharp Monospace TextBox Style                                    -->
+    <!-- 6. shadcn/ui <Input> Style                                          -->
     <!-- =================================================================== -->
     <Style x:Key="ModernHexTextBoxStyle" TargetType="TextBox">
-        <Setter Property="Background" Value="#0A0A0C"/>
+        <Setter Property="Background" Value="#09090B"/>
         <Setter Property="Foreground" Value="#FAFAFA"/>
-        <Setter Property="CaretBrush" Value="#10B981"/>
-        <Setter Property="BorderBrush" Value="#2A2A32"/>
+        <Setter Property="CaretBrush" Value="#FAFAFA"/>
+        <Setter Property="BorderBrush" Value="#27272A"/>
         <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="Padding" Value="7,4"/>
-        <Setter Property="FontSize" Value="11.5"/>
+        <Setter Property="Padding" Value="8,5"/>
+        <Setter Property="FontSize" Value="12"/>
         <Setter Property="FontFamily" Value="{StaticResource MonoFont}"/>
         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
@@ -303,15 +292,15 @@
                 <ControlTemplate TargetType="TextBox">
                     <Border x:Name="Bd"
                             Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderThickness}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="0"
+                            CornerRadius="6"
                             Padding="{TemplateBinding Padding}">
                         <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsKeyboardFocused" Value="True">
-                            <Setter TargetName="Bd" Property="BorderBrush" Value="#10B981"/>
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="#71717A"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -320,24 +309,24 @@
     </Style>
 
     <!-- =================================================================== -->
-    <!-- 7. Sharp Technical ContextMenu & MenuItem (CornerRadius = 0)        -->
+    <!-- 7. shadcn/ui <DropdownMenu> ContextMenu & MenuItem                  -->
     <!-- =================================================================== -->
     <Style TargetType="Separator">
         <Setter Property="Height" Value="1"/>
-        <Setter Property="Margin" Value="0,4"/>
+        <Setter Property="Margin" Value="-4,4"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Separator">
-                    <Border Height="1" Background="#24242C"/>
+                    <Border Height="1" Background="#27272A"/>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
     </Style>
 
     <Style TargetType="MenuItem">
-        <Setter Property="FontFamily" Value="{StaticResource MonoFont}"/>
-        <Setter Property="Foreground" Value="#D4D4D8"/>
-        <Setter Property="FontSize" Value="11.5"/>
+        <Setter Property="FontFamily" Value="{StaticResource SansFont}"/>
+        <Setter Property="Foreground" Value="#FAFAFA"/>
+        <Setter Property="FontSize" Value="12.5"/>
         <Setter Property="FontWeight" Value="Normal"/>
         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
@@ -346,36 +335,41 @@
                 <ControlTemplate TargetType="MenuItem">
                     <Border x:Name="ItemBorder"
                             Background="Transparent"
-                            CornerRadius="0"
-                            Padding="10,6"
-                            Margin="0">
+                            CornerRadius="5"
+                            Padding="8,6"
+                            Margin="0,1">
                         <Grid>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="16"/>
+                                <ColumnDefinition Width="18"/>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
 
-                            <!-- Sharp square check indicator -->
-                            <Rectangle x:Name="CheckMark"
-                                       Grid.Column="0"
-                                       Width="6" Height="6"
-                                       Fill="#10B981"
-                                       Visibility="Collapsed"
-                                       VerticalAlignment="Center"
-                                       HorizontalAlignment="Left"/>
+                            <Path x:Name="CheckMark"
+                                  Grid.Column="0"
+                                  Data="{StaticResource GeomCheck}"
+                                  Stroke="#FAFAFA"
+                                  StrokeThickness="1.5"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  Width="11" Height="11"
+                                  Stretch="Uniform"
+                                  Visibility="Collapsed"
+                                  VerticalAlignment="Center"
+                                  HorizontalAlignment="Left"/>
 
                             <ContentPresenter Grid.Column="1"
                                               ContentSource="Header"
                                               RecognizesAccessKey="True"
                                               VerticalAlignment="Center"/>
 
-                            <!-- Submenu arrow -->
                             <Path x:Name="SubArrow"
                                   Grid.Column="2"
                                   Data="M 0,0 L 4,4 L 0,8"
                                   Stroke="#71717A"
-                                  StrokeThickness="1.2"
+                                  StrokeThickness="1.3"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
                                   Margin="12,0,0,0"
                                   VerticalAlignment="Center"
                                   Visibility="Collapsed"/>
@@ -383,18 +377,18 @@
                             <Popup x:Name="PART_Popup"
                                    AllowsTransparency="True"
                                    Placement="Right"
-                                   HorizontalOffset="1"
+                                   HorizontalOffset="4"
                                    IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}"
                                    Focusable="False"
                                    PopupAnimation="Fade">
-                                <Border Background="#0A0A0C"
-                                        BorderBrush="#34343E"
+                                <Border Background="#09090B"
+                                        BorderBrush="#27272A"
                                         BorderThickness="1"
-                                        CornerRadius="0"
-                                        Padding="2"
-                                        Margin="4">
+                                        CornerRadius="8"
+                                        Padding="4"
+                                        Margin="8">
                                     <Border.Effect>
-                                        <DropShadowEffect Color="#000000" BlurRadius="10" ShadowDepth="2" Opacity="0.6"/>
+                                        <DropShadowEffect Color="#000000" BlurRadius="16" ShadowDepth="4" Opacity="0.5"/>
                                     </Border.Effect>
                                     <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
                                 </Border>
@@ -409,11 +403,12 @@
                             <Setter TargetName="SubArrow" Property="Visibility" Value="Visible"/>
                         </Trigger>
                         <Trigger Property="IsHighlighted" Value="True">
-                            <Setter TargetName="ItemBorder" Property="Background" Value="#1E1E26"/>
-                            <Setter Property="Foreground" Value="#FAFAFA"/>
+                            <Setter TargetName="ItemBorder" Property="Background" Value="#27272A"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter Property="Foreground" Value="#52525E"/>
+                            <Setter Property="Foreground" Value="#71717A"/>
+                            <Setter Property="FontSize" Value="11.5"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -428,14 +423,15 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ContextMenu">
-                    <Border Background="#0A0A0C"
-                            BorderBrush="#34343E"
+                    <Border Background="#09090B"
+                            BorderBrush="#27272A"
                             BorderThickness="1"
-                            CornerRadius="0"
-                            Padding="2"
-                            Margin="6">
+                            CornerRadius="8"
+                            Padding="4"
+                            Margin="10"
+                            MinWidth="190">
                         <Border.Effect>
-                            <DropShadowEffect Color="#000000" BlurRadius="12" ShadowDepth="3" Opacity="0.65"/>
+                            <DropShadowEffect Color="#000000" BlurRadius="20" ShadowDepth="4" Opacity="0.55"/>
                         </Border.Effect>
                         <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
                     </Border>

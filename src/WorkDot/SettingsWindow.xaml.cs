@@ -21,7 +21,7 @@ public partial class SettingsWindow : Window
 
         string version = AppSettingsService.AppVersion;
         VersionBadgeText.Text = version;
-        FooterVersionText.Text = $"ALINESTUDIO // {version}";
+        FooterVersionText.Text = $"WorkDot {version}";
 
         LoadSettingsIntoUi();
     }
@@ -66,7 +66,7 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private static void UpdatePreviewColor(System.Windows.Shapes.Rectangle preview, string hex, string fallback)
+    private static void UpdatePreviewColor(System.Windows.Shapes.Ellipse preview, string hex, string fallback)
     {
         var c = AppSettingsService.ParseColorOrDefault(hex, fallback);
         preview.Fill = new SolidColorBrush(c);

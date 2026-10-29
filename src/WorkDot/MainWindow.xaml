@@ -13,30 +13,29 @@
         UseLayoutRounding="True">
 
     <Window.Resources>
-        <!-- Sharp Technical Square Reticle Pulse Animation -->
         <Storyboard x:Key="PulseStoryboard" RepeatBehavior="Forever">
             <DoubleAnimation Storyboard.TargetName="PulseRingScale"
                              Storyboard.TargetProperty="ScaleX"
-                             From="1.0" To="2.1" Duration="0:0:1.8">
+                             From="1.0" To="2.2" Duration="0:0:2.0">
                 <DoubleAnimation.EasingFunction>
                     <QuadraticEase EasingMode="EaseOut"/>
                 </DoubleAnimation.EasingFunction>
             </DoubleAnimation>
             <DoubleAnimation Storyboard.TargetName="PulseRingScale"
                              Storyboard.TargetProperty="ScaleY"
-                             From="1.0" To="2.1" Duration="0:0:1.8">
+                             From="1.0" To="2.2" Duration="0:0:2.0">
                 <DoubleAnimation.EasingFunction>
                     <QuadraticEase EasingMode="EaseOut"/>
                 </DoubleAnimation.EasingFunction>
             </DoubleAnimation>
             <DoubleAnimation Storyboard.TargetName="PulseRing"
                              Storyboard.TargetProperty="Opacity"
-                             From="0.8" To="0.0" Duration="0:0:1.8"/>
+                             From="0.65" To="0.0" Duration="0:0:2.0"/>
         </Storyboard>
     </Window.Resources>
 
     <Grid x:Name="RootContainer"
-          Margin="10"
+          Margin="14"
           MouseLeftButtonDown="OnOverlayMouseLeftButtonDown"
           MouseMove="OnOverlayMouseMove"
           MouseLeftButtonUp="OnOverlayMouseLeftButtonUp"
@@ -46,216 +45,200 @@
 
         <Grid.ContextMenu>
             <ContextMenu x:Name="OverlayContextMenu" Opened="OnContextMenuOpened">
-                <MenuItem x:Name="MenuVersionHeader" Header="WORKDOT // v1.3.0" IsEnabled="False"/>
+                <MenuItem x:Name="MenuVersionHeader" Header="WorkDot v1.4.0" IsEnabled="False"/>
                 <Separator/>
                 <MenuItem Header="환경설정" Click="OnOpenSettingsClick"/>
-                <MenuItem Header="근태 포털 열기" Click="OnOpenPortalClick"/>
-                <MenuItem Header="상태 동기화" Click="OnRefreshClick"/>
+                <MenuItem Header="다우오피스 근태 창 열기" Click="OnOpenPortalClick"/>
+                <MenuItem Header="지금 상태 동기화" Click="OnRefreshClick"/>
                 <Separator/>
                 <MenuItem x:Name="MenuAlwaysOnTop" Header="항상 위에 표시" IsCheckable="True" Click="OnMenuAlwaysOnTopClick"/>
                 <MenuItem x:Name="MenuRunAtStartup" Header="Windows 시작 시 자동 실행" IsCheckable="True" Click="OnMenuRunAtStartupClick"/>
-                <MenuItem Header="위젯 배율">
-                    <MenuItem Header="80%" Tag="0.8" Click="OnMenuQuickScaleClick"/>
-                    <MenuItem Header="100%" Tag="1.0" Click="OnMenuQuickScaleClick"/>
-                    <MenuItem Header="120%" Tag="1.2" Click="OnMenuQuickScaleClick"/>
-                    <MenuItem Header="140%" Tag="1.4" Click="OnMenuQuickScaleClick"/>
+                <MenuItem Header="위젯 크기">
+                    <MenuItem Header="작게 (80%)" Tag="0.8" Click="OnMenuQuickScaleClick"/>
+                    <MenuItem Header="보통 (100%)" Tag="1.0" Click="OnMenuQuickScaleClick"/>
+                    <MenuItem Header="크게 (120%)" Tag="1.2" Click="OnMenuQuickScaleClick"/>
+                    <MenuItem Header="아주 크게 (140%)" Tag="1.4" Click="OnMenuQuickScaleClick"/>
                 </MenuItem>
                 <Separator/>
-                <MenuItem Header="수동 전환 : 근무중" Click="OnForceWorkingClick"/>
-                <MenuItem Header="수동 전환 : 퇴근" Click="OnForceOffWorkClick"/>
-                <Separator/>
-                <MenuItem Header="작업 표시줄 기준 정렬" Click="OnSnapToTaskbarClick"/>
-                <MenuItem Header="미니 인디케이터 모드 전환" Click="OnToggleMiniModeClick"/>
+                <MenuItem Header="수동 상태 전환">
+                    <MenuItem Header="근무중으로 표시" Click="OnForceWorkingClick"/>
+                    <MenuItem Header="퇴근으로 표시" Click="OnForceOffWorkClick"/>
+                </MenuItem>
+                <MenuItem Header="작업 표시줄 위로 정렬" Click="OnSnapToTaskbarClick"/>
+                <MenuItem Header="미니 배지 모드 전환" Click="OnToggleMiniModeClick"/>
                 <MenuItem Header="위젯 숨기기" Click="OnHideOverlayClick"/>
                 <Separator/>
                 <MenuItem Header="종료" Click="OnExitClick"/>
             </ContextMenu>
         </Grid.ContextMenu>
 
-        <!-- MONO TECH SHARP MODULE FRAME (CornerRadius = 0) -->
+        <!-- Modern React / Vercel / Linear Single-Line Floating Toolbar (rounded-xl = 10px) -->
         <Border x:Name="CapsuleBorder"
-                CornerRadius="0"
-                Background="#0A0A0C"
-                BorderBrush="#282830"
-                BorderThickness="1">
+                CornerRadius="10"
+                Background="#09090B"
+                BorderBrush="#27272A"
+                BorderThickness="1"
+                Padding="6,5">
             <Border.LayoutTransform>
                 <ScaleTransform x:Name="CapsuleScaleTransform" ScaleX="1.0" ScaleY="1.0"/>
             </Border.LayoutTransform>
             <Border.Effect>
                 <DropShadowEffect Color="#000000"
-                                  BlurRadius="10"
-                                  ShadowDepth="2"
+                                  BlurRadius="16"
+                                  ShadowDepth="4"
                                   Opacity="0.45"/>
             </Border.Effect>
 
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <!-- Left 3px Signal Bar -->
-                    <ColumnDefinition Width="3"/>
-                    <!-- Main Content -->
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
 
-                <!-- 0. Left Edge Signal Accent Bar -->
-                <Rectangle x:Name="StatusAccentBar"
-                           Grid.Column="0"
-                           Fill="#10B981"/>
+                <!-- 1. shadcn/ui Status Badge Chip (rounded-md = 6px) -->
+                <Border x:Name="StatusBadgeBorder"
+                        CornerRadius="6"
+                        Background="#1A10B981"
+                        BorderBrush="#3310B981"
+                        BorderThickness="1"
+                        Padding="9,4"
+                        VerticalAlignment="Center"
+                        ToolTip="더블클릭: 미니 배지 모드 전환 | Ctrl+휠: 크기 조절">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Grid Width="12" Height="12" Margin="0,0,6,0" VerticalAlignment="Center">
+                            <Ellipse x:Name="PulseRing"
+                                     Width="7" Height="7"
+                                     Fill="#10B981"
+                                     Opacity="0.6"
+                                     RenderTransformOrigin="0.5,0.5">
+                                <Ellipse.RenderTransform>
+                                    <ScaleTransform x:Name="PulseRingScale" ScaleX="1" ScaleY="1"/>
+                                </Ellipse.RenderTransform>
+                            </Ellipse>
+                            <Ellipse x:Name="StatusCoreDot"
+                                     Width="7" Height="7"
+                                     Fill="#10B981"/>
+                        </Grid>
 
-                <StackPanel Grid.Column="1"
-                            Orientation="Horizontal"
-                            VerticalAlignment="Center">
-
-                    <!-- 1. Sharp Square Status Indicator Cell -->
-                    <Grid Width="32" Height="32"
-                          VerticalAlignment="Center"
-                          ToolTip="더블클릭: 미니 모드 전환 | Ctrl+휠: 배율 조절">
-                        <!-- Expanding Square Reticle -->
-                        <Rectangle x:Name="PulseRing"
-                                   Width="8" Height="8"
-                                   Stroke="#10B981"
-                                   StrokeThickness="1"
-                                   Fill="Transparent"
-                                   Opacity="0.7"
-                                   RenderTransformOrigin="0.5,0.5">
-                            <Rectangle.RenderTransform>
-                                <ScaleTransform x:Name="PulseRingScale" ScaleX="1" ScaleY="1"/>
-                            </Rectangle.RenderTransform>
-                        </Rectangle>
-
-                        <!-- Solid Core Square -->
-                        <Rectangle x:Name="StatusCoreDot"
-                                   Width="6" Height="6"
-                                   Fill="#10B981"/>
-                    </Grid>
-
-                    <!-- 2. Telemetry Readout Cell -->
-                    <StackPanel x:Name="InfoPanel"
-                                Orientation="Horizontal"
-                                VerticalAlignment="Center"
-                                Margin="0,0,10,0">
-
-                        <StackPanel VerticalAlignment="Center">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock x:Name="StatusTitleText"
-                                           Text="근무중"
-                                           FontFamily="{StaticResource MonoFont}"
-                                           Foreground="#10B981"
-                                           FontSize="12.5"
-                                           FontWeight="Bold"
-                                           VerticalAlignment="Center"/>
-
-                                <TextBlock x:Name="StatusCodeText"
-                                           Text="ON-DUTY"
-                                           FontFamily="{StaticResource MonoFont}"
-                                           Foreground="#52525E"
-                                           FontSize="9.5"
-                                           FontWeight="SemiBold"
-                                           VerticalAlignment="Center"
-                                           Margin="6,1,0,0"/>
-
-                                <!-- Snap Indicator Bracket Badge -->
-                                <Border x:Name="SnapBadge"
-                                        Background="#141418"
-                                        BorderBrush="#2A2A34"
-                                        BorderThickness="1"
-                                        CornerRadius="0"
-                                        Padding="4,1"
-                                        Margin="6,0,0,0"
-                                        VerticalAlignment="Center"
-                                        Visibility="Collapsed">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <Path Data="{StaticResource GeomSnap}"
-                                              Stroke="#71717A"
-                                              StrokeThickness="1.1"
-                                              Width="9" Height="9"
-                                              Stretch="Uniform"
-                                              Margin="0,0,4,0"
-                                              VerticalAlignment="Center"/>
-                                        <TextBlock x:Name="SnapBadgeText"
-                                                   Text="DOCK"
-                                                   FontFamily="{StaticResource MonoFont}"
-                                                   Foreground="#71717A"
-                                                   FontSize="9.5"
-                                                   MaxWidth="90"
-                                                   TextTrimming="CharacterEllipsis"/>
-                                    </StackPanel>
-                                </Border>
-                            </StackPanel>
-
-                            <StackPanel Orientation="Horizontal" Margin="0,1,0,0">
-                                <TextBlock x:Name="SubStatusText"
-                                           Text="SYNCING..."
-                                           FontFamily="{StaticResource MonoFont}"
-                                           Foreground="#8E8E98"
-                                           FontSize="10.5"/>
-                                <TextBlock x:Name="InlineVersionText"
-                                           Text=" // v1.3.0"
-                                           FontFamily="{StaticResource MonoFont}"
-                                           Foreground="#464652"
-                                           FontSize="9.5"
-                                           VerticalAlignment="Bottom"/>
-                            </StackPanel>
-                        </StackPanel>
+                        <TextBlock x:Name="StatusTitleText"
+                                   Text="근무중"
+                                   FontFamily="{StaticResource SansFont}"
+                                   Foreground="#10B981"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center"/>
                     </StackPanel>
+                </Border>
 
-                    <!-- 3. Action & Tool Cell (with 1px Vertical Divider) -->
-                    <Border x:Name="ActionPanel"
-                            BorderBrush="#22222A"
-                            BorderThickness="1,0,0,0"
-                            Padding="8,4,6,4"
-                            VerticalAlignment="Stretch">
+                <!-- 2. Single-Line Time & Dock Info -->
+                <StackPanel x:Name="InfoPanel"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            Margin="9,0,2,0">
+
+                    <TextBlock x:Name="SubStatusText"
+                               Text="동기화 중..."
+                               FontFamily="{StaticResource SansFont}"
+                               Foreground="#A1A1AA"
+                               FontSize="12"
+                               FontWeight="Medium"
+                               VerticalAlignment="Center"/>
+
+                    <!-- Docked Window Pill -->
+                    <Border x:Name="SnapBadge"
+                            Background="#18181B"
+                            BorderBrush="#27272A"
+                            BorderThickness="1"
+                            CornerRadius="5"
+                            Padding="6,2"
+                            Margin="7,0,0,0"
+                            VerticalAlignment="Center"
+                            Visibility="Collapsed">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <!-- Primary Action Button (Inline Confirm, No MessageBox) -->
-                            <Button x:Name="PrimaryActionButton"
-                                    Style="{StaticResource ModernActionBtnStyle}"
-                                    Content="출근"
-                                    Background="#1410B981"
-                                    BorderBrush="#10B981"
-                                    Foreground="#10B981"
-                                    Click="OnPrimaryActionClick"
-                                    Margin="0,0,4,0"/>
-
-                            <!-- Portal Icon Button -->
-                            <Button x:Name="PortalIconButton"
-                                    Style="{StaticResource ModernIconBtnStyle}"
-                                    ToolTip="다우오피스 근태 포털"
-                                    Click="OnOpenPortalClick"
-                                    Margin="0,0,2,0">
-                                <Path Data="{StaticResource GeomExternal}"
-                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                      StrokeThickness="1.3"
-                                      Width="12" Height="12"
-                                      Stretch="Uniform"/>
-                            </Button>
-
-                            <!-- Refresh Icon Button -->
-                            <Button x:Name="RefreshIconButton"
-                                    Style="{StaticResource ModernIconBtnStyle}"
-                                    ToolTip="상태 동기화"
-                                    Click="OnRefreshClick"
-                                    Margin="0,0,2,0">
-                                <Path Data="{StaticResource GeomRefresh}"
-                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                      StrokeThickness="1.3"
-                                      Width="12" Height="12"
-                                      Stretch="Uniform"/>
-                            </Button>
-
-                            <!-- Settings Icon Button -->
-                            <Button x:Name="SettingsIconButton"
-                                    Style="{StaticResource ModernIconBtnStyle}"
-                                    ToolTip="환경설정"
-                                    Click="OnOpenSettingsClick">
-                                <Path Data="{StaticResource GeomSettings}"
-                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                      StrokeThickness="1.3"
-                                      Width="12" Height="12"
-                                      Stretch="Uniform"/>
-                            </Button>
+                            <Path Data="{StaticResource GeomSnap}"
+                                  Stroke="#71717A"
+                                  StrokeThickness="1.3"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  Width="10" Height="10"
+                                  Stretch="Uniform"
+                                  Margin="0,0,4,0"
+                                  VerticalAlignment="Center"/>
+                            <TextBlock x:Name="SnapBadgeText"
+                                       Text="작업 표시줄"
+                                       FontFamily="{StaticResource SansFont}"
+                                       Foreground="#71717A"
+                                       FontSize="11"
+                                       MaxWidth="95"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
-            </Grid>
+
+                <!-- 3. Divider + Action Button & Lucide Icon Buttons -->
+                <StackPanel x:Name="ActionPanel"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+
+                    <!-- 1px Vertical Divider -->
+                    <Border x:Name="ActionDivider"
+                            Width="1" Height="16"
+                            Background="#27272A"
+                            Margin="9,0,8,0"
+                            VerticalAlignment="Center"/>
+
+                    <!-- Primary Action Button -->
+                    <Button x:Name="PrimaryActionButton"
+                            Style="{StaticResource ModernActionBtnStyle}"
+                            Content="출근하기"
+                            Background="#FAFAFA"
+                            Foreground="#09090B"
+                            Click="OnPrimaryActionClick"
+                            Margin="0,0,4,0"/>
+
+                    <!-- Portal Button -->
+                    <Button x:Name="PortalIconButton"
+                            Style="{StaticResource ModernIconBtnStyle}"
+                            ToolTip="다우오피스 근태 창 열기"
+                            Click="OnOpenPortalClick"
+                            Margin="0,0,1,0">
+                        <Path Data="{StaticResource GeomExternal}"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.4"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              Width="13" Height="13"
+                              Stretch="Uniform"/>
+                    </Button>
+
+                    <!-- Refresh Button -->
+                    <Button x:Name="RefreshIconButton"
+                            Style="{StaticResource ModernIconBtnStyle}"
+                            ToolTip="상태 새로고침"
+                            Click="OnRefreshClick"
+                            Margin="0,0,1,0">
+                        <Path Data="{StaticResource GeomRefresh}"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.4"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              Width="13" Height="13"
+                              Stretch="Uniform"/>
+                    </Button>
+
+                    <!-- Settings Button -->
+                    <Button x:Name="SettingsIconButton"
+                            Style="{StaticResource ModernIconBtnStyle}"
+                            ToolTip="환경설정"
+                            Click="OnOpenSettingsClick">
+                        <Path Data="{StaticResource GeomSettings}"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.4"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              Width="13" Height="13"
+                              Stretch="Uniform"/>
+                    </Button>
+                </StackPanel>
+
+            </StackPanel>
         </Border>
     </Grid>
 </Window>
