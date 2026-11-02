@@ -122,10 +122,14 @@ dotnet build WorkDot.slnx -c Release
 ```
 
 ### 새 버전 GitHub Release (MSI) 배포
-1. `src/WorkDot/WorkDot.csproj`의 `<Version>`을 올리고 커밋합니다.
-2. 태그를 생성하여 GitHub에 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 자동으로 `WorkDot-Setup-win-x64.msi`를 빌드해 **GitHub Releases**에 게시합니다:
+1. 변경·추가된 기능에 맞춰 **`README.md` 사용법 및 스크린샷을 최신화**합니다.
+2. `src/WorkDot/WorkDot.csproj`의 `<Version>` 및 상단 최신 버전 표기를 올립니다.
+3. **`CHANGELOG.md`**에 새 버전의 릴리즈 노트(신규 기능, 버그 수정 내역)를 상세히 작성합니다.
+4. `.\publish-release.bat`로 로컬 MSI 빌드를 검증한 뒤 커밋과 태그를 생성합니다:
    ```powershell
+   git add -A
+   git commit -m "chore: release v1.5.11"
    git tag v1.5.11
    git push origin main --tags
    ```
-3. 로컬에서 설치용 MSI 파일(`dist\WorkDot-Setup-win-x64.msi`)을 직접 빌드하려면 `.\publish-release.bat`를 실행합니다.
+5. 태그를 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 자동으로 `WorkDot-Setup-win-x64.msi`를 빌드해 **GitHub Releases**에 배포합니다.
