@@ -2,7 +2,7 @@
 
 다우오피스(DaouOffice) 근태 현황을 실시간으로 동기화하고 화면 경계에 깔끔하게 고정해 사용하는 Windows 미니 오버레이 위젯입니다.
 
-- **최신 버전**: `v1.5.11`
+- **최신 버전**: `v1.5.12`
 - **저장소**: https://github.com/aline-taiyo/WorkDot
 - **최신 릴리즈 설치 파일(`WorkDot-Setup-win-x64.msi`)**: https://github.com/aline-taiyo/WorkDot/releases/latest
 
@@ -128,8 +128,8 @@ dotnet build WorkDot.slnx -c Release
 4. `.\publish-release.bat`로 로컬 MSI 빌드를 검증한 뒤 커밋과 태그를 생성합니다:
    ```powershell
    git add -A
-   git commit -m "chore: release v1.5.11"
-   git tag v1.5.11
+   git commit -m "chore: release v1.5.12"
+   git tag v1.5.12
    git push origin main --tags
    ```
 5. 태그를 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 자동으로 `WorkDot-Setup-win-x64.msi`를 빌드해 **GitHub Releases**에 배포합니다.
