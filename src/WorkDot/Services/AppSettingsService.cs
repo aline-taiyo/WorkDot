@@ -25,6 +25,8 @@ public sealed class AppSettings
     public double WidgetScale { get; set; } = 1.0;           // 0.70 ~ 3.00
     public string TimeFontFamily { get; set; } = "Cascadia Mono, Consolas"; // 위젯 시간 표시 폰트
     public string PortalHotKey { get; set; } = "Ctrl+Shift+F5"; // 근태홈 열기 기본 단축키
+    public double? WidgetLeft { get; set; }                  // 이전 위젯 X 위치 (DIP)
+    public double? WidgetTop { get; set; }                   // 이전 위젯 Y 위치 (DIP)
     public bool AlwaysOnTop { get; set; } = true;
     public bool ShowInTaskbar { get; set; } = false;         // 작업표시줄 아이콘 표시 여부
     public bool RunAtStartup { get; set; } = false;
@@ -201,6 +203,11 @@ public sealed class AppSettingsService : IDisposable
             s.PortalHotKey = "Ctrl+Shift+F5";
         else
             s.PortalHotKey = s.PortalHotKey.Trim();
+
+        if (s.WidgetLeft.HasValue && double.IsNaN(s.WidgetLeft.Value))
+            s.WidgetLeft = null;
+        if (s.WidgetTop.HasValue && double.IsNaN(s.WidgetTop.Value))
+            s.WidgetTop = null;
 
         if (!TryParseColor(s.WorkingColorHex, out _))
             s.WorkingColorHex = "#10B981";

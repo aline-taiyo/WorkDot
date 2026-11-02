@@ -102,6 +102,7 @@ public partial class MainWindow : Window
         Loaded += OnMainWindowLoaded;
         Closed += (_, _) =>
         {
+            SaveCurrentWidgetPosition();
             _hoverCollapseTimer.Stop();
             _idleTimer.Stop();
             _pollTimer.Stop();
@@ -134,7 +135,7 @@ public partial class MainWindow : Window
         ApplySettingsAndVisuals();
 
         _snapService.Initialize();
-        _snapService.SnapToTaskbarDefault();
+        RestoreWidgetPositionOrSnapDefault();
         _idleTimer.Start();
         _autoUpdateService.StartBackgroundSchedule();
 
@@ -705,6 +706,7 @@ public partial class MainWindow : Window
         {
             UpdateLayout();
             _snapService.EvaluateMagneticSnap(applyPosition: true);
+            SaveCurrentWidgetPosition();
             return;
         }
 
@@ -1005,6 +1007,58 @@ public partial class MainWindow : Window
         ActionPanel.Visibility = Visibility.Collapsed;
         UpdateLayout();
         _snapService.SnapToTaskbarDefault();
+        SaveCurrentWidgetPosition();
+    }
+
+    private void RestoreWidgetPositionOrSnapDefault()
+    {
+        var s = _settingsService.Current;
+        if (s.WidgetLeft.HasValue && s.WidgetTop.HasValue &&
+            !double.IsNaN(s.WidgetLeft.Value) && !double.IsNaN(s.WidgetTop.Value))
+        {
+            double savedLeft = s.WidgetLeft.Value;
+            double savedTop = s.WidgetTop.Value;
+
+            if (IsPositionOnScreen(savedLeft, savedTop, Width, Height))
+            {
+                Left = savedLeft;
+                Top = savedTop;
+                UpdateLayout();
+                _snapService.EvaluateMagneticSnap(applyPosition: true);
+                return;
+            }
+        }
+
+        _snapService.SnapToTaskbarDefault();
+    }
+
+    private static bool IsPositionOnScreen(double left, double top, double width, double height)
+    {
+        double vLeft = SystemParameters.VirtualScreenLeft;
+        double vTop = SystemParameters.VirtualScreenTop;
+        double vWidth = SystemParameters.VirtualScreenWidth;
+        double vHeight = SystemParameters.VirtualScreenHeight;
+
+        Rect virtualScreen = new(vLeft, vTop, vWidth, vHeight);
+        Rect widgetRect = new(left, top, Math.Max(width, 40), Math.Max(height, 40));
+
+        virtualScreen.Intersect(widgetRect);
+        return !virtualScreen.IsEmpty && virtualScreen.Width >= 30 && virtualScreen.Height >= 30;
+    }
+
+    private void SaveCurrentWidgetPosition()
+    {
+        if (WindowState != WindowState.Normal || double.IsNaN(Left) || double.IsNaN(Top))
+            return;
+
+        if (Left < -10000 || Top < -10000)
+            return;
+
+        _settingsService.SaveAndApply(s =>
+        {
+            s.WidgetLeft = Math.Round(Left, 1);
+            s.WidgetTop = Math.Round(Top, 1);
+        });
     }
 
     private void OnHideOverlayClick(object sender, RoutedEventArgs e)
