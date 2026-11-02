@@ -74,19 +74,19 @@
                     <!-- Right: Actions & Close -->
                     <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
                         <Button Style="{StaticResource ModernActionBtnStyle}"
+                                Content="홈"
+                                Background="#18181B"
+                                BorderBrush="#27272A"
+                                Foreground="#E4E4E7"
+                                Click="OnGoHomeClick"
+                                Margin="0,0,6,0"/>
+
+                        <Button Style="{StaticResource ModernActionBtnStyle}"
                                 Content="팝업 닫기"
                                 Background="#18181B"
                                 BorderBrush="#27272A"
                                 Foreground="#E4E4E7"
                                 Click="OnDismissPopupsClick"
-                                Margin="0,0,6,0"/>
-
-                        <Button Style="{StaticResource ModernActionBtnStyle}"
-                                Content="근태 홈"
-                                Background="#18181B"
-                                BorderBrush="#27272A"
-                                Foreground="#E4E4E7"
-                                Click="OnGoHomeClick"
                                 Margin="0,0,6,0"/>
 
                         <Button Style="{StaticResource ModernActionBtnStyle}"

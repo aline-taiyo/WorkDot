@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private readonly Win32SnapService _snapService;
     private readonly DaouAttendanceService _attendanceService;
     private readonly TaskbarTrayService _trayService;
+    private readonly GlobalHotKeyService _hotKeyService;
     private readonly DispatcherTimer _pollTimer;
     private readonly DispatcherTimer _longPressTimer;
     private readonly DispatcherTimer _idleTimer;
@@ -49,11 +50,16 @@ public partial class MainWindow : Window
         _snapService = new Win32SnapService(this);
         _attendanceService = new DaouAttendanceService();
         _trayService = new TaskbarTrayService();
+        _hotKeyService = new GlobalHotKeyService();
 
         string ver = AppSettingsService.AppVersion;
         MenuVersionHeader.Header = $"WorkDot {ver}";
 
-        _settingsService.SettingsChanged += _ => Dispatcher.Invoke(ApplySettingsAndVisuals);
+        _settingsService.SettingsChanged += s => Dispatcher.Invoke(() =>
+        {
+            ApplySettingsAndVisuals();
+            _hotKeyService.Register(s.PortalHotKey);
+        });
         _attendanceService.SnapshotChanged += _ => Dispatcher.Invoke(ApplySettingsAndVisuals);
 
         WireTrayEvents();
@@ -100,6 +106,7 @@ public partial class MainWindow : Window
             _idleTimer.Stop();
             _pollTimer.Stop();
             _longPressTimer.Stop();
+            _hotKeyService.Dispose();
             _autoUpdateService.Dispose();
             _portalWindow?.ShutdownClose();
             _trayService.Dispose();
@@ -130,6 +137,9 @@ public partial class MainWindow : Window
         _snapService.SnapToTaskbarDefault();
         _idleTimer.Start();
         _autoUpdateService.StartBackgroundSchedule();
+
+        _hotKeyService.Initialize(this, TogglePortalWindowFromHotKey);
+        _hotKeyService.Register(_settingsService.Current.PortalHotKey);
 
         try
         {
@@ -944,6 +954,22 @@ public partial class MainWindow : Window
     {
         _portalWindow ??= new AttendanceWebWindow(_attendanceService);
         _portalWindow.ShowInteractive();
+    }
+
+    private void TogglePortalWindowFromHotKey()
+    {
+        Dispatcher.Invoke(() =>
+        {
+            _portalWindow ??= new AttendanceWebWindow(_attendanceService);
+            if (_portalWindow.IsVisible && _portalWindow.IsActive)
+            {
+                _portalWindow.Close();
+            }
+            else
+            {
+                _portalWindow.ShowInteractive();
+            }
+        });
     }
 
     private async void OnRefreshClick(object sender, RoutedEventArgs e)

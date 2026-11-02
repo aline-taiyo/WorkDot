@@ -43,7 +43,7 @@
                 <MenuItem x:Name="MenuClockActionItem" Header="퇴근하기" FontWeight="SemiBold" Click="OnMenuClockActionClick"/>
                 <Separator/>
                 <MenuItem Header="환경설정" Click="OnOpenSettingsClick"/>
-                <MenuItem Header="브라우저 열기" Click="OnOpenPortalClick"/>
+                <MenuItem Header="근태홈 열기" Click="OnOpenPortalClick"/>
                 <MenuItem Header="새로고침" Click="OnRefreshClick"/>
                 <Separator/>
                 <MenuItem x:Name="MenuAlwaysOnTop" Header="항상 위에 표시" IsCheckable="True" Click="OnMenuAlwaysOnTopClick"/>
@@ -175,10 +175,10 @@
                             Margin="6,0,4,0"
                             VerticalAlignment="Center"/>
 
-                    <!-- Home Button (브라우저 열기) -->
+                    <!-- Home Button (근태홈 열기) -->
                     <Button x:Name="PortalIconButton"
                             Style="{StaticResource ModernIconBtnStyle}"
-                            ToolTip="브라우저 열기"
+                            ToolTip="근태홈 열기"
                             Click="OnOpenPortalClick"
                             Margin="0,0,1,0">
                         <Rectangle Width="15" Height="15"

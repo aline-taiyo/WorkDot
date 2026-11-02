@@ -180,6 +180,8 @@ public partial class SettingsWindow : Window
             AlwaysOnTopCheck.IsChecked = s.AlwaysOnTop;
             RunAtStartupCheck.IsChecked = s.RunAtStartup;
             AutoUpdateCheck.IsChecked = s.AutoUpdateEnabled;
+
+            UpdateHotKeyVisual(s.PortalHotKey);
         }
         finally
         {
@@ -246,6 +248,83 @@ public partial class SettingsWindow : Window
                 // Fallback
             }
             _settingsService.SaveAndApply(s => s.TimeFontFamily = fontName);
+        }
+    }
+
+    private void UpdateHotKeyVisual(string? hotKey)
+    {
+        bool isNone = string.IsNullOrWhiteSpace(hotKey) || string.Equals(hotKey, "None", StringComparison.OrdinalIgnoreCase);
+        if (HotKeyInputBox != null)
+        {
+            HotKeyInputBox.Text = isNone ? "사용 안 함" : hotKey!;
+        }
+        if (HotKeyStatusText != null)
+        {
+            if (isNone)
+            {
+                HotKeyStatusText.Text = "단축키 해제됨";
+                HotKeyStatusText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#71717A"));
+            }
+            else
+            {
+                HotKeyStatusText.Text = "전역 단축키 활성화됨";
+                HotKeyStatusText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#10B981"));
+            }
+        }
+    }
+
+    private void SetHotKey(string gesture)
+    {
+        bool isNone = string.IsNullOrWhiteSpace(gesture) || string.Equals(gesture, "None", StringComparison.OrdinalIgnoreCase);
+        string normalized = isNone ? "None" : gesture;
+
+        UpdateHotKeyVisual(normalized);
+        _settingsService.SaveAndApply(s => s.PortalHotKey = normalized);
+    }
+
+    private void OnHotKeyInputBoxPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        e.Handled = true;
+
+        Key key = (e.Key == Key.System ? e.SystemKey : e.Key);
+
+        if (key is Key.Back or Key.Delete or Key.Escape)
+        {
+            SetHotKey("None");
+            return;
+        }
+
+        if (key is Key.LeftCtrl or Key.RightCtrl or
+            Key.LeftAlt or Key.RightAlt or
+            Key.LeftShift or Key.RightShift or
+            Key.LWin or Key.RWin)
+        {
+            return;
+        }
+
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        if (modifiers == ModifierKeys.None && !(key >= Key.F1 && key <= Key.F24))
+        {
+            return;
+        }
+
+        string gesture = GlobalHotKeyService.NormalizeGestureString(modifiers, key);
+        if (!string.IsNullOrWhiteSpace(gesture))
+        {
+            SetHotKey(gesture);
+        }
+    }
+
+    private void OnClearHotKeyClick(object sender, RoutedEventArgs e)
+    {
+        SetHotKey("None");
+    }
+
+    private void OnPresetHotKeyClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button btn && btn.Tag is string tagStr && !string.IsNullOrWhiteSpace(tagStr))
+        {
+            SetHotKey(tagStr);
         }
     }
 

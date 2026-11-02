@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="환경설정"
         Icon="pack://application:,,,/WorkDot;component/Assets/Icons/workdot.ico"
-        Width="440" Height="700"
+        Width="440" Height="840"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -178,6 +178,45 @@
                                 </Grid>
                             </Popup>
                         </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ShadcnTextBoxStyle" TargetType="TextBox">
+            <Setter Property="FontFamily" Value="{StaticResource MonoFont}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Background" Value="#18181B"/>
+            <Setter Property="Foreground" Value="#FAFAFA"/>
+            <Setter Property="BorderBrush" Value="#27272A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="CaretBrush" Value="#FAFAFA"/>
+            <Setter Property="SelectionBrush" Value="#3F3F46"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ScrollViewer x:Name="PART_ContentHost"
+                                          Focusable="False"
+                                          HorizontalScrollBarVisibility="Hidden"
+                                          VerticalScrollBarVisibility="Hidden"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsFocused" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#10B981"/>
+                                <Setter TargetName="Bd" Property="Background" Value="#1E1E22"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#3F3F46"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -380,6 +419,64 @@
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 4. Portal HotKey Card -->
+                    <Border Style="{StaticResource ShadcnCardStyle}">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,8">
+                                <TextBlock Text="근태홈 열기 단축키"
+                                           FontFamily="{StaticResource SansFont}"
+                                           FontSize="13"
+                                           FontWeight="SemiBold"
+                                           Foreground="#FAFAFA"
+                                           VerticalAlignment="Center"/>
+                                <TextBlock x:Name="HotKeyStatusText"
+                                           Text="전역 단축키 활성화됨"
+                                           FontFamily="{StaticResource SansFont}"
+                                           FontSize="11.5"
+                                           Foreground="#10B981"
+                                           DockPanel.Dock="Right"
+                                           HorizontalAlignment="Right"
+                                           VerticalAlignment="Center"/>
+                            </DockPanel>
+
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <TextBox x:Name="HotKeyInputBox"
+                                         Style="{StaticResource ShadcnTextBoxStyle}"
+                                         Text="Ctrl+Shift+W"
+                                         IsReadOnly="True"
+                                         Cursor="Hand"
+                                         ToolTip="클릭 후 원하는 단축키를 키보드로 누르세요. (Backspace/Delete로 해제)"
+                                         PreviewKeyDown="OnHotKeyInputBoxPreviewKeyDown"/>
+
+                                <Button Grid.Column="1"
+                                        Style="{StaticResource ScalePillBtnStyle}"
+                                        Content="지우기"
+                                        Margin="6,0,0,0"
+                                        Padding="10,6"
+                                        VerticalAlignment="Stretch"
+                                        ToolTip="단축키 사용 안 함"
+                                        Click="OnClearHotKeyClick"/>
+                            </Grid>
+
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <TextBlock Text="추천: "
+                                           FontFamily="{StaticResource SansFont}"
+                                           FontSize="11"
+                                           Foreground="#71717A"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,4,0"/>
+                                <Button Style="{StaticResource ScalePillBtnStyle}" Content="Ctrl+Shift+W" Tag="Ctrl+Shift+W" Click="OnPresetHotKeyClick"/>
+                                <Button Style="{StaticResource ScalePillBtnStyle}" Content="Ctrl+Alt+W" Tag="Ctrl+Alt+W" Click="OnPresetHotKeyClick"/>
+                                <Button Style="{StaticResource ScalePillBtnStyle}" Content="Alt+F12" Tag="Alt+F12" Click="OnPresetHotKeyClick"/>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
 
