@@ -87,7 +87,55 @@ public sealed class AutoUpdateService : IDisposable
         var result = await CheckForUpdateAsync();
         if (result.IsUpdateAvailable && !string.IsNullOrWhiteSpace(result.DownloadUrl) && !string.IsNullOrWhiteSpace(result.AssetName))
         {
+            // 무한 업데이트 방지: 같은 태그를 이미 설치 시도했는데도 여전히 구버전으로 실행 중이면
+            // 설치된 바이너리의 버전이 태그와 어긋난 것이므로 자동 재시도하지 않는다 (수동 '업데이트 확인'은 허용).
+            if (WasRecentlyAttempted(result.LatestVersionTag))
+            {
+                UpdateStatus($"{result.LatestVersionTag} 자동 업데이트를 이미 시도했으나 버전이 바뀌지 않아 재시도를 중단했습니다.");
+                return;
+            }
+
+            RecordAttempt(result.LatestVersionTag);
             await DownloadAndApplyUpdateAsync(result.DownloadUrl, result.AssetName);
+        }
+    }
+
+    private static string AttemptFilePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "WorkDot",
+        "update-attempt.txt");
+
+    private static bool WasRecentlyAttempted(string tag)
+    {
+        try
+        {
+            if (!File.Exists(AttemptFilePath))
+                return false;
+
+            string[] parts = File.ReadAllText(AttemptFilePath).Trim().Split('|');
+            if (parts.Length != 2 || !string.Equals(parts[0], tag, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return DateTime.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture,
+                       System.Globalization.DateTimeStyles.RoundtripKind, out DateTime at)
+                   && DateTime.UtcNow - at < TimeSpan.FromHours(24);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void RecordAttempt(string tag)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(AttemptFilePath)!);
+            File.WriteAllText(AttemptFilePath, $"{tag}|{DateTime.UtcNow:O}", new UTF8Encoding(false));
+        }
+        catch
+        {
+            // Ignore
         }
     }
 

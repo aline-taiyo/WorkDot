@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release tag (e.g. v1.5.12)'
+        description: 'Release tag (e.g. v1.5.13)'
         required: true
-        default: 'v1.5.12'
+        default: 'v1.5.13'
 
 permissions:
   contents: write
@@ -37,7 +37,8 @@ jobs:
           $tag = "${{ github.event.inputs.tag_name || github.ref_name }}"
           $ver = $tag.TrimStart('v', 'V')
           if (-not $ver) { $ver = "1.5.7" }
-          dotnet publish src/WorkDot/WorkDot.csproj -c Release -r win-x64 --self-contained false -o dist/publish
+          # 태그 버전을 바이너리에 강제 주입하여 태그와 앱 내부 버전이 어긋나지 않게 한다 (무한 자동 업데이트 방지)
+          dotnet publish src/WorkDot/WorkDot.csproj -c Release -r win-x64 --self-contained false -o dist/publish -p:Version=$ver
           wix build installer/WorkDot.wxs -arch x64 -d ProductVersion="$ver" -o "dist/WorkDot-Setup-win-x64.msi"
 
       - name: Create GitHub Release

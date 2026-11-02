@@ -4,6 +4,19 @@ WorkDot의 모든 주요 변경 사항 및 버전별 릴리즈 노트입니다.
 
 ---
 
+## [v1.5.13] - 2026-11-02
+
+### 🐛 버그 수정 (Bug Fixes)
+- **무한 자동 업데이트 버그 수정**:
+  - `WorkDot.csproj`에 `AssemblyVersion`/`FileVersion`이 `1.5.10.0`으로 고정되어 있어, 새 버전(v1.5.11, v1.5.12)을 설치해도 앱이 자신을 계속 구버전으로 인식하고 다운로드·설치·재시작을 무한 반복하던 문제를 수정했습니다.
+  - 이제 `AssemblyVersion`/`FileVersion`은 `<Version>`에서 자동으로 파생되며, 릴리즈 빌드(GitHub Actions, `publish-release.bat`)는 태그 버전을 `-p:Version`으로 바이너리에 강제 주입합니다.
+- **자동 업데이트 재시도 방지 장치 추가**:
+  - 같은 태그로 자동 업데이트를 이미 시도했는데도 버전이 바뀌지 않으면 24시간 동안 자동 재시도를 멈춥니다 (`%LOCALAPPDATA%\WorkDot\update-attempt.txt`). 환경설정의 수동 `업데이트 확인`은 계속 동작합니다.
+
+> [!NOTE]
+> v1.5.11·v1.5.12가 설치된 PC는 자동 업데이트로 v1.5.13을 한 번 받으면 반복이 멈춥니다.
+
+---
 ## [v1.5.12] - 2026-11-02
 
 ### 🚀 신규 기능 및 개선 (Features & Improvements)

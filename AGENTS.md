@@ -37,6 +37,11 @@ WorkDot 프로젝트에서 코드를 수정하거나 릴리즈할 때 **모든 �
 
 ## 3. 플랫폼 및 개발 환경 주의사항
 
+- **버전 고정 금지 (무한 자동 업데이트 방지)**:
+  - `WorkDot.csproj`의 `AssemblyVersion`/`FileVersion`을 숫자로 고정하지 말 것. 반드시 `$(Version).0`으로 `<Version>`에서 파생시킨다.
+  - 자동 업데이트는 `Assembly.GetName().Version`으로 현재 버전을 판단하므로, 고정값이 태그보다 낮으면 설치 후에도 구버전으로 인식해 업데이트를 무한 반복한다 (v1.5.11~v1.5.12 사고).
+  - 릴리즈 빌드는 태그 버전을 `-p:Version=X.Y.Z`로 주입한다. 릴리즈 후 설치된 `WorkDot.exe`의 `FileVersion`이 태그와 일치하는지 확인한다.
+
 - **WPF & WinForms 혼용 네임스페이스 모호성**:
   - `WorkDot.csproj`에 `<UseWindowsForms>true</UseWindowsForms>`가 켜져 있으므로, `KeyEventArgs`, `FontFamily`, `Color`, `ColorConverter` 사용 시 `System.Windows.Input`, `System.Windows.Media` 네임스페이스를 명시적으로 작성할 것.
 - **WebView2 동기화**:

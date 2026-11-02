@@ -11,7 +11,7 @@ if "%TAG%"=="" set "TAG=v%VER%"
 
 echo [1/3] Building WorkDot (%TAG%) Release...
 if exist "dist\publish" rmdir /s /q "dist\publish"
-dotnet publish src\WorkDot\WorkDot.csproj -c Release -r win-x64 --self-contained false -o dist\publish
+dotnet publish src\WorkDot\WorkDot.csproj -c Release -r win-x64 --self-contained false -o dist\publish -p:Version=%VER%
 if errorlevel 1 (
     echo Build failed.
     exit /b 1
