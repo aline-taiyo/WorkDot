@@ -166,6 +166,101 @@ public sealed class DaouAttendanceService
 
     public event Action<AttendanceSnapshot>? SnapshotChanged;
 
+    public DaouAttendanceService()
+    {
+        TryRestoreTodaySnapshotFromCache();
+    }
+
+    private void TryRestoreTodaySnapshotFromCache()
+    {
+        try
+        {
+            if (!File.Exists(LastProbeLogPath))
+                return;
+
+            DateTime lastWrite = File.GetLastWriteTime(LastProbeLogPath);
+            if (lastWrite.Date != DateTime.Today)
+                return;
+
+            string json = File.ReadAllText(LastProbeLogPath);
+            if (string.IsNullOrWhiteSpace(json))
+                return;
+
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            bool isLogin = root.TryGetProperty("isLoginPage", out var lp) && lp.GetBoolean();
+            if (isLogin)
+                return;
+
+            string state = root.TryGetProperty("state", out var sProp) ? (sProp.GetString() ?? "") : "";
+            string? clockIn = root.TryGetProperty("clockIn", out var inProp) ? inProp.GetString() : null;
+            string? clockOut = root.TryGetProperty("clockOut", out var outProp) ? outProp.GetString() : null;
+            string? duration = root.TryGetProperty("duration", out var durProp) ? durProp.GetString() : null;
+
+            if (state == "WORKING" && !string.IsNullOrWhiteSpace(clockIn))
+            {
+                CurrentSnapshot = new AttendanceSnapshot(
+                    WorkStatusKind.Working,
+                    "근무중",
+                    $"출근 {clockIn}" + (!string.IsNullOrWhiteSpace(duration) ? $" · {duration}" : ""),
+                    clockIn,
+                    clockOut,
+                    duration,
+                    DateTime.Now);
+            }
+            else if (state == "BREAK")
+            {
+                CurrentSnapshot = new AttendanceSnapshot(
+                    WorkStatusKind.Break,
+                    "휴게",
+                    "휴게중",
+                    clockIn,
+                    clockOut,
+                    duration,
+                    DateTime.Now);
+            }
+            else if (state == "OFF_WORK" && !string.IsNullOrWhiteSpace(clockOut))
+            {
+                CurrentSnapshot = new AttendanceSnapshot(
+                    WorkStatusKind.OffWork,
+                    "퇴근",
+                    $"퇴근 {clockOut}",
+                    clockIn,
+                    clockOut,
+                    duration,
+                    DateTime.Now);
+            }
+        }
+        catch
+        {
+            // Ignore cache restore errors
+        }
+    }
+
+    private string? GetCachedClockInToday()
+    {
+        try
+        {
+            if (File.Exists(LastProbeLogPath) && File.GetLastWriteTime(LastProbeLogPath).Date == DateTime.Today)
+            {
+                string json = File.ReadAllText(LastProbeLogPath);
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("clockIn", out var inProp))
+                {
+                    string? cin = inProp.GetString();
+                    if (!string.IsNullOrWhiteSpace(cin))
+                        return cin;
+                }
+            }
+        }
+        catch
+        {
+            // Ignore
+        }
+        return null;
+    }
+
     public string AppDataFolder =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WorkDot");
 
@@ -690,6 +785,12 @@ public sealed class DaouAttendanceService
                 return (true, clockIn ? "출근 처리가 완료되었습니다." : "퇴근 처리가 완료되었습니다.");
             }
 
+            if (result.StartsWith("DISABLED:", StringComparison.Ordinal))
+            {
+                await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
+                return (true, clockIn ? "이미 출근 처리되어 있습니다." : "이미 퇴근 처리되어 있습니다.");
+            }
+
             return (false, $"다우오피스 페이지에서 {(clockIn ? "출근" : "퇴근")} 버튼을 찾지 못했습니다 ({result}). 그룹웨어 창에서 직접 확인해주세요.");
         }
         catch (Exception ex)
@@ -790,11 +891,12 @@ public sealed class DaouAttendanceService
         if (status == WorkStatusKind.Break)
         {
             _activeBreakStartTime ??= DateTime.Now;
+            string breakClockIn = CurrentSnapshot.ClockInTimeText ?? GetCachedClockInToday() ?? nowTime;
             UpdateSnapshot(new AttendanceSnapshot(
                 WorkStatusKind.Break,
                 "휴게",
                 $"휴게중 ({_activeBreakStartTime.Value:HH:mm}~)",
-                CurrentSnapshot.ClockInTimeText ?? nowTime,
+                breakClockIn,
                 null,
                 CurrentSnapshot.WorkedDurationText,
                 DateTime.Now,
@@ -803,11 +905,12 @@ public sealed class DaouAttendanceService
         }
         else if (status == WorkStatusKind.Working)
         {
+            string workClockIn = CurrentSnapshot.ClockInTimeText ?? GetCachedClockInToday() ?? nowTime;
             UpdateSnapshot(new AttendanceSnapshot(
                 WorkStatusKind.Working,
                 "근무중",
-                $"출근 {CurrentSnapshot.ClockInTimeText ?? nowTime}",
-                CurrentSnapshot.ClockInTimeText ?? nowTime,
+                $"출근 {workClockIn}",
+                workClockIn,
                 null,
                 CurrentSnapshot.WorkedDurationText,
                 DateTime.Now,

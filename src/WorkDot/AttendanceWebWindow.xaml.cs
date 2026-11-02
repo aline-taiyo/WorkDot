@@ -8,8 +8,10 @@ namespace WorkDot;
 public partial class AttendanceWebWindow : Window
 {
     private readonly DaouAttendanceService _attendanceService;
+    private readonly TaskCompletionSource<bool> _initTcs = new();
     private bool _isAppShuttingDown;
     private bool _isWebViewInitialized;
+    private bool _isInteractiveRequested;
 
     public AttendanceWebWindow(DaouAttendanceService attendanceService)
     {
@@ -40,22 +42,27 @@ public partial class AttendanceWebWindow : Window
 
         Show();
         await EnsureWebViewReadyAsync();
-        Hide();
+
+        if (!_isInteractiveRequested)
+        {
+            Hide();
+        }
     }
 
     public async void ShowInteractive()
     {
-        await EnsureWebViewReadyAsync();
+        _isInteractiveRequested = true;
+
+        var workArea = SystemParameters.WorkArea;
+        if (Left < -1000 || Top < -1000 || double.IsNaN(Left) || double.IsNaN(Top))
+        {
+            Left = Math.Max(workArea.Left, workArea.Left + (workArea.Width - Width) / 2);
+            Top = Math.Max(workArea.Top, workArea.Top + (workArea.Height - Height) / 2);
+        }
 
         Opacity = 1.0;
-        ShowInTaskbar = false;
+        ShowInTaskbar = true;
         ShowActivated = true;
-        if (Left < -1000 || Top < -1000)
-        {
-            var workArea = SystemParameters.WorkArea;
-            Left = workArea.Left + (workArea.Width - Width) / 2;
-            Top = workArea.Top + (workArea.Height - Height) / 2;
-        }
 
         if (WindowState == WindowState.Minimized)
         {
@@ -63,8 +70,14 @@ public partial class AttendanceWebWindow : Window
         }
 
         Show();
+        Topmost = true;
         Activate();
+        Focus();
+        Topmost = false;
+
         _attendanceService.IsInteractiveBrowsing = true;
+
+        await EnsureWebViewReadyAsync();
     }
 
     public void ShutdownClose()
@@ -90,15 +103,33 @@ public partial class AttendanceWebWindow : Window
     private async Task EnsureWebViewReadyAsync()
     {
         if (_isWebViewInitialized)
+        {
+            await _initTcs.Task;
             return;
+        }
 
         _isWebViewInitialized = true;
-        await _attendanceService.InitializeWebViewAsync(PortalWebView);
-
-        PortalWebView.CoreWebView2.SourceChanged += (_, _) =>
+        try
         {
-            UrlText.Text = PortalWebView.CoreWebView2.Source ?? string.Empty;
-        };
+            await _attendanceService.InitializeWebViewAsync(PortalWebView);
+
+            if (PortalWebView.CoreWebView2 != null)
+            {
+                PortalWebView.CoreWebView2.SourceChanged += (_, _) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        UrlText.Text = PortalWebView.CoreWebView2.Source ?? string.Empty;
+                    });
+                };
+            }
+            _initTcs.TrySetResult(true);
+        }
+        catch (Exception ex)
+        {
+            _initTcs.TrySetException(ex);
+            throw;
+        }
     }
 
     private void OnWindowClosing(object? sender, CancelEventArgs e)
@@ -113,7 +144,9 @@ public partial class AttendanceWebWindow : Window
     /// <summary>창을 숨기고 백그라운드 동기화로 전환한다 (다른 메뉴를 보고 있었다면 근태 페이지로 복귀)</summary>
     private void HideToBackground()
     {
+        _isInteractiveRequested = false;
         _attendanceService.IsInteractiveBrowsing = false;
+        ShowInTaskbar = false;
         Hide();
         _ = _attendanceService.RefreshStatusAsync();
     }
@@ -138,7 +171,7 @@ public partial class AttendanceWebWindow : Window
 
         await _attendanceService.DismissBlockingPopupsAndSurveysAsync(PortalWebView.CoreWebView2);
 
-        // 팝업만 닫고 현재 보고 있는 페이지는 유지한다 (근태 페이지 이동은 '근태 홈' 버튼으로)
+        // 팝업만 닫고 현재 보고 있는 페이지는 유지한다 (근태 페이지 이동은 '홈' 버튼으로)
         string current = PortalWebView.CoreWebView2.Source ?? string.Empty;
         if (current.Contains("/ehr/app/attend", StringComparison.OrdinalIgnoreCase))
         {

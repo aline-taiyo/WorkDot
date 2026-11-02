@@ -952,7 +952,10 @@ public partial class MainWindow : Window
 
     private void OpenPortalWindow()
     {
-        _portalWindow ??= new AttendanceWebWindow(_attendanceService);
+        if (_portalWindow == null || !_portalWindow.IsLoaded)
+        {
+            _portalWindow = new AttendanceWebWindow(_attendanceService);
+        }
         _portalWindow.ShowInteractive();
     }
 
@@ -960,7 +963,10 @@ public partial class MainWindow : Window
     {
         Dispatcher.Invoke(() =>
         {
-            _portalWindow ??= new AttendanceWebWindow(_attendanceService);
+            if (_portalWindow == null || !_portalWindow.IsLoaded)
+            {
+                _portalWindow = new AttendanceWebWindow(_attendanceService);
+            }
             if (_portalWindow.IsVisible && _portalWindow.IsActive)
             {
                 _portalWindow.Close();

@@ -8,7 +8,7 @@
         Width="1120" Height="780"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
-        ShowInTaskbar="False"
+        ShowInTaskbar="True"
         Background="#09090B"
         SnapsToDevicePixels="True"
         UseLayoutRounding="True">

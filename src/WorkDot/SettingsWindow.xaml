@@ -450,7 +450,7 @@
 
                                 <TextBox x:Name="HotKeyInputBox"
                                          Style="{StaticResource ShadcnTextBoxStyle}"
-                                         Text="Ctrl+Shift+W"
+                                         Text="Ctrl+Shift+F5"
                                          IsReadOnly="True"
                                          Cursor="Hand"
                                          ToolTip="클릭 후 원하는 단축키를 키보드로 누르세요. (Backspace/Delete로 해제)"
@@ -473,8 +473,8 @@
                                            Foreground="#71717A"
                                            VerticalAlignment="Center"
                                            Margin="0,0,4,0"/>
+                                <Button Style="{StaticResource ScalePillBtnStyle}" Content="Ctrl+Shift+F5" Tag="Ctrl+Shift+F5" Click="OnPresetHotKeyClick"/>
                                 <Button Style="{StaticResource ScalePillBtnStyle}" Content="Ctrl+Shift+W" Tag="Ctrl+Shift+W" Click="OnPresetHotKeyClick"/>
-                                <Button Style="{StaticResource ScalePillBtnStyle}" Content="Ctrl+Alt+W" Tag="Ctrl+Alt+W" Click="OnPresetHotKeyClick"/>
                                 <Button Style="{StaticResource ScalePillBtnStyle}" Content="Alt+F12" Tag="Alt+F12" Click="OnPresetHotKeyClick"/>
                             </StackPanel>
                         </StackPanel>
