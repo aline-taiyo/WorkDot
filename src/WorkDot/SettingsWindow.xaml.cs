@@ -46,7 +46,50 @@ public partial class SettingsWindow : Window
             _autoUpdateService.StatusChanged -= OnAutoUpdateStatusChanged;
         };
 
+        PopulateFontFamilies();
         LoadSettingsIntoUi();
+    }
+
+    private void PopulateFontFamilies()
+    {
+        var fontItems = new List<string>();
+
+        string[] presets =
+        [
+            "Cascadia Mono, Consolas",
+            "Cascadia Mono",
+            "Cascadia Code",
+            "Consolas",
+            "JetBrains Mono",
+            "D2Coding",
+            "Pretendard",
+            "Segoe UI",
+            "Segoe UI Variable Display",
+            "Malgun Gothic"
+        ];
+
+        foreach (var p in presets)
+        {
+            fontItems.Add(p);
+        }
+
+        try
+        {
+            foreach (var family in Fonts.SystemFontFamilies.OrderBy(f => f.Source))
+            {
+                string name = family.Source;
+                if (!name.StartsWith("@") && !fontItems.Contains(name, StringComparer.OrdinalIgnoreCase))
+                {
+                    fontItems.Add(name);
+                }
+            }
+        }
+        catch
+        {
+            // Ignore system font enumeration errors
+        }
+
+        TimeFontComboBox.ItemsSource = fontItems;
     }
 
     private void OnAutoUpdateStatusChanged(string status)
@@ -112,6 +155,28 @@ public partial class SettingsWindow : Window
             ScaleSlider.Value = s.WidgetScale;
             ScaleValueText.Text = $"{(int)Math.Round(s.WidgetScale * 100)}%";
 
+            string currentFont = s.TimeFontFamily;
+            if (TimeFontComboBox.ItemsSource is IEnumerable<string> items)
+            {
+                string? matched = items.FirstOrDefault(f => string.Equals(f, currentFont, StringComparison.OrdinalIgnoreCase));
+                if (matched != null)
+                {
+                    TimeFontComboBox.SelectedItem = matched;
+                }
+                else
+                {
+                    TimeFontComboBox.SelectedIndex = 0;
+                }
+            }
+            try
+            {
+                FontPreviewText.FontFamily = new System.Windows.Media.FontFamily(s.TimeFontFamily);
+            }
+            catch
+            {
+                // Fallback
+            }
+
             AlwaysOnTopCheck.IsChecked = s.AlwaysOnTop;
             RunAtStartupCheck.IsChecked = s.RunAtStartup;
             AutoUpdateCheck.IsChecked = s.AutoUpdateEnabled;
@@ -162,6 +227,25 @@ public partial class SettingsWindow : Window
             double.TryParse(tagStr, NumberStyles.Float, CultureInfo.InvariantCulture, out double scale))
         {
             ScaleSlider.Value = scale;
+        }
+    }
+
+    private void OnTimeFontComboBoxSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isLoadingUi || _settingsService == null || TimeFontComboBox == null)
+            return;
+
+        if (TimeFontComboBox.SelectedItem is string fontName && !string.IsNullOrWhiteSpace(fontName))
+        {
+            try
+            {
+                FontPreviewText.FontFamily = new System.Windows.Media.FontFamily(fontName);
+            }
+            catch
+            {
+                // Fallback
+            }
+            _settingsService.SaveAndApply(s => s.TimeFontFamily = fontName);
         }
     }
 

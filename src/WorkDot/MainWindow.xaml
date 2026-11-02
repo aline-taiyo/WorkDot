@@ -52,7 +52,9 @@
                     <MenuItem Header="80%" Tag="0.8" Click="OnMenuQuickScaleClick"/>
                     <MenuItem Header="100%" Tag="1.0" Click="OnMenuQuickScaleClick"/>
                     <MenuItem Header="120%" Tag="1.2" Click="OnMenuQuickScaleClick"/>
-                    <MenuItem Header="140%" Tag="1.4" Click="OnMenuQuickScaleClick"/>
+                    <MenuItem Header="150%" Tag="1.5" Click="OnMenuQuickScaleClick"/>
+                    <MenuItem Header="200%" Tag="2.0" Click="OnMenuQuickScaleClick"/>
+                    <MenuItem Header="300%" Tag="3.0" Click="OnMenuQuickScaleClick"/>
                 </MenuItem>
                 <Separator/>
                 <MenuItem Header="상태 전환">

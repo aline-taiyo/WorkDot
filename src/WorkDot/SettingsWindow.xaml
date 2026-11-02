@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="환경설정"
         Icon="pack://application:,,,/WorkDot;component/Assets/Icons/workdot.ico"
-        Width="440" Height="656"
+        Width="440" Height="700"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -52,6 +52,132 @@
                                 <Setter Property="Foreground" Value="#FAFAFA"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ShadcnComboBoxItemStyle" TargetType="ComboBoxItem">
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Foreground" Value="#E4E4E7"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="ItemBorder"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="5"
+                                Margin="2,1"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ItemBorder" Property="Background" Value="#27272A"/>
+                                <Setter Property="Foreground" Value="#FAFAFA"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="ItemBorder" Property="Background" Value="#3F3F46"/>
+                                <Setter Property="Foreground" Value="#FAFAFA"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <ControlTemplate x:Key="ComboBoxToggleButtonTemplate" TargetType="ToggleButton">
+            <Border x:Name="Border"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="6">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="28"/>
+                    </Grid.ColumnDefinitions>
+                    <Path Grid.Column="1"
+                          HorizontalAlignment="Center"
+                          VerticalAlignment="Center"
+                          Data="M 0,0 L 4,4 L 8,0"
+                          Stroke="#A1A1AA"
+                          StrokeThickness="1.5"
+                          StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round"/>
+                </Grid>
+            </Border>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Border" Property="BorderBrush" Value="#3F3F46"/>
+                    <Setter TargetName="Border" Property="Background" Value="#1E1E22"/>
+                </Trigger>
+                <Trigger Property="IsChecked" Value="True">
+                    <Setter TargetName="Border" Property="BorderBrush" Value="#52525B"/>
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+
+        <Style x:Key="ShadcnComboBoxStyle" TargetType="ComboBox">
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Foreground" Value="#FAFAFA"/>
+            <Setter Property="Background" Value="#18181B"/>
+            <Setter Property="BorderBrush" Value="#27272A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="ItemContainerStyle" Value="{StaticResource ShadcnComboBoxItemStyle}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton Name="ToggleButton"
+                                          Template="{StaticResource ComboBoxToggleButtonTemplate}"
+                                          Focusable="False"
+                                          IsChecked="{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                          ClickMode="Press"
+                                          Background="{TemplateBinding Background}"
+                                          BorderBrush="{TemplateBinding BorderBrush}"
+                                          BorderThickness="{TemplateBinding BorderThickness}"/>
+                            <ContentPresenter Name="ContentSite"
+                                              IsHitTestVisible="False"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                              Margin="10,6,28,6"
+                                              VerticalAlignment="Center"
+                                              HorizontalAlignment="Left"/>
+                            <Popup Name="Popup"
+                                   Placement="Bottom"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}"
+                                   AllowsTransparency="True"
+                                   Focusable="False"
+                                   PopupAnimation="Slide">
+                                <Grid Name="DropDown"
+                                      SnapsToDevicePixels="True"
+                                      MinWidth="{TemplateBinding ActualWidth}"
+                                      MaxHeight="220"
+                                      Margin="0,4,0,8">
+                                    <Border Background="#121215"
+                                            BorderBrush="#27272A"
+                                            BorderThickness="1"
+                                            CornerRadius="8"
+                                            Padding="4">
+                                        <Border.Effect>
+                                            <DropShadowEffect Color="#000000" BlurRadius="16" ShadowDepth="4" Opacity="0.6"/>
+                                        </Border.Effect>
+                                        <ScrollViewer SnapsToDevicePixels="True">
+                                            <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                        </ScrollViewer>
+                                    </Border>
+                                </Grid>
+                            </Popup>
+                        </Grid>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -204,17 +330,56 @@
                                                FontSize="12"
                                                VerticalAlignment="Center"
                                                Margin="0,0,6,0"/>
-                                    <Button Style="{StaticResource ScalePillBtnStyle}" Content="80%" Tag="0.8" Click="OnQuickScaleClick"/>
                                     <Button Style="{StaticResource ScalePillBtnStyle}" Content="100%" Tag="1.0" Click="OnQuickScaleClick"/>
-                                    <Button Style="{StaticResource ScalePillBtnStyle}" Content="120%" Tag="1.2" Click="OnQuickScaleClick"/>
-                                    <Button Style="{StaticResource ScalePillBtnStyle}" Content="140%" Tag="1.4" Click="OnQuickScaleClick"/>
+                                    <Button Style="{StaticResource ScalePillBtnStyle}" Content="150%" Tag="1.5" Click="OnQuickScaleClick"/>
+                                    <Button Style="{StaticResource ScalePillBtnStyle}" Content="200%" Tag="2.0" Click="OnQuickScaleClick"/>
+                                    <Button Style="{StaticResource ScalePillBtnStyle}" Content="300%" Tag="3.0" Click="OnQuickScaleClick"/>
                                 </StackPanel>
                             </DockPanel>
                             <Slider x:Name="ScaleSlider"
                                     Style="{StaticResource ModernFlatSliderStyle}"
-                                    Minimum="0.70" Maximum="1.60" SmallChange="0.05" LargeChange="0.1"
+                                    Minimum="0.70" Maximum="3.00" SmallChange="0.05" LargeChange="0.1"
                                     Value="1.0"
                                     ValueChanged="OnScaleSliderChanged"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 3. Time Font Family -->
+                    <Border Style="{StaticResource ShadcnCardStyle}">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,8">
+                                <TextBlock Text="시간 표시 폰트"
+                                           FontFamily="{StaticResource SansFont}"
+                                           FontSize="13"
+                                           FontWeight="SemiBold"
+                                           Foreground="#FAFAFA"
+                                           VerticalAlignment="Center"/>
+                                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                    <TextBlock Text="미리보기: "
+                                               FontFamily="{StaticResource SansFont}"
+                                               FontSize="11.5"
+                                               Foreground="#71717A"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="FontPreviewText"
+                                               Text="08:15"
+                                               FontSize="13"
+                                               FontWeight="SemiBold"
+                                               Foreground="#10B981"
+                                               VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </DockPanel>
+
+                            <ComboBox x:Name="TimeFontComboBox"
+                                      Style="{StaticResource ShadcnComboBoxStyle}"
+                                      SelectionChanged="OnTimeFontComboBoxSelectionChanged">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}"
+                                                   FontFamily="{Binding}"
+                                                   FontSize="12.5"/>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
                         </StackPanel>
                     </Border>
 

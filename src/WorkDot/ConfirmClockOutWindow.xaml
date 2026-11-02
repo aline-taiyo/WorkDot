@@ -24,7 +24,8 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <TextBlock Grid.Row="0"
+            <TextBlock x:Name="PromptTextBlock"
+                       Grid.Row="0"
                        Text="퇴근 할래요?"
                        FontFamily="{StaticResource SansFont}"
                        FontSize="13.5"

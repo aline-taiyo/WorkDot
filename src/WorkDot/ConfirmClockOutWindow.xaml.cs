@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 
 namespace WorkDot;
 
@@ -7,11 +8,19 @@ public partial class ConfirmClockOutWindow : Window
 {
     public bool IsConfirmed { get; private set; }
 
-    public ConfirmClockOutWindow(Window ownerWidget)
+    public ConfirmClockOutWindow(Window ownerWidget, string promptText = "퇴근 할래요?", string confirmColorHex = "#EF4444")
     {
         InitializeComponent();
         Owner = ownerWidget;
         ShowInTaskbar = false;
+
+        PromptTextBlock.Text = promptText;
+        if (System.Windows.Media.ColorConverter.ConvertFromString(confirmColorHex) is System.Windows.Media.Color c)
+        {
+            var brush = new SolidColorBrush(c);
+            YesButton.Background = brush;
+            YesButton.BorderBrush = brush;
+        }
 
         Loaded += (_, _) =>
         {

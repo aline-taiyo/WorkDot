@@ -198,6 +198,18 @@ public partial class MainWindow : Window
         CapsuleScaleTransform.ScaleX = settings.WidgetScale;
         CapsuleScaleTransform.ScaleY = settings.WidgetScale;
 
+        if (!string.IsNullOrWhiteSpace(settings.TimeFontFamily))
+        {
+            try
+            {
+                SubStatusText.FontFamily = new System.Windows.Media.FontFamily(settings.TimeFontFamily);
+            }
+            catch
+            {
+                // Fallback
+            }
+        }
+
         bool isLightTheme = _settingsService.IsEffectiveLightTheme();
         System.Windows.Media.Color iconFgColor;
         if (isLightTheme)
@@ -560,7 +572,7 @@ public partial class MainWindow : Window
 
         bool pressedStatusIcon = dep == null || !IsInsideElement(dep, ActionPanel);
 
-        // 더블클릭 시 휴게 <-> 근무중 즉시 전환
+        // 더블클릭 시 휴게 <-> 근무중 Y/N 확인 팝업 후 전환
         if (e.ClickCount == 2 && pressedStatusIcon && !_isActionBusy)
         {
             _longPressTimer.Stop();
@@ -574,11 +586,29 @@ public partial class MainWindow : Window
             var curStatus = _attendanceService.CurrentSnapshot.Status;
             if (curStatus == WorkStatusKind.Working)
             {
-                _ = ExecuteBreakActionAsync(true);
+                var confirmPopup = new ConfirmClockOutWindow(this, "휴게 할래요?", "#F59E0B");
+                bool confirmed = confirmPopup.ShowDialog() == true && confirmPopup.IsConfirmed;
+                if (!IsMouseOver && !_isPointerDown)
+                {
+                    SetExpandedMode(false);
+                }
+                if (confirmed)
+                {
+                    _ = ExecuteBreakActionAsync(true);
+                }
             }
             else if (curStatus == WorkStatusKind.Break)
             {
-                _ = ExecuteBreakActionAsync(false);
+                var confirmPopup = new ConfirmClockOutWindow(this, "업무 복귀할래요?", "#10B981");
+                bool confirmed = confirmPopup.ShowDialog() == true && confirmPopup.IsConfirmed;
+                if (!IsMouseOver && !_isPointerDown)
+                {
+                    SetExpandedMode(false);
+                }
+                if (confirmed)
+                {
+                    _ = ExecuteBreakActionAsync(false);
+                }
             }
 
             e.Handled = true;
@@ -697,7 +727,7 @@ public partial class MainWindow : Window
         if ((Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
         {
             double step = e.Delta > 0 ? 0.05 : -0.05;
-            double nextScale = Math.Clamp(_settingsService.Current.WidgetScale + step, 0.70, 1.60);
+            double nextScale = Math.Clamp(_settingsService.Current.WidgetScale + step, 0.70, 3.00);
             _settingsService.SaveAndApply(s => s.WidgetScale = nextScale);
             e.Handled = true;
         }

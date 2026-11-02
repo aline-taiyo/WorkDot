@@ -22,7 +22,8 @@ public sealed class AppSettings
     public string WorkingColorHex { get; set; } = "#10B981"; // 기본 네온 에메랄드 그린
     public string OffWorkColorHex { get; set; } = "#EF4444"; // 기본 루비 레드
     public double WidgetOpacity { get; set; } = 0.95;        // 0.25 ~ 1.0
-    public double WidgetScale { get; set; } = 1.0;           // 0.70 ~ 1.60
+    public double WidgetScale { get; set; } = 1.0;           // 0.70 ~ 3.00
+    public string TimeFontFamily { get; set; } = "Cascadia Mono, Consolas"; // 위젯 시간 표시 폰트
     public bool AlwaysOnTop { get; set; } = true;
     public bool ShowInTaskbar { get; set; } = false;         // 작업표시줄 아이콘 표시 여부
     public bool RunAtStartup { get; set; } = false;
@@ -188,7 +189,12 @@ public sealed class AppSettingsService : IDisposable
     private static AppSettings Normalize(AppSettings s)
     {
         s.WidgetOpacity = Math.Clamp(Math.Round(s.WidgetOpacity, 2), 0.25, 1.0);
-        s.WidgetScale = Math.Clamp(Math.Round(s.WidgetScale, 2), 0.70, 1.60);
+        s.WidgetScale = Math.Clamp(Math.Round(s.WidgetScale, 2), 0.70, 3.00);
+
+        if (string.IsNullOrWhiteSpace(s.TimeFontFamily))
+            s.TimeFontFamily = "Cascadia Mono, Consolas";
+        else
+            s.TimeFontFamily = s.TimeFontFamily.Trim();
 
         if (!TryParseColor(s.WorkingColorHex, out _))
             s.WorkingColorHex = "#10B981";
