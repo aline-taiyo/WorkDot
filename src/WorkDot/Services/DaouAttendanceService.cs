@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Windows;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 
@@ -325,31 +327,94 @@ public sealed class DaouAttendanceService
             }
         };
 
-        coreWebView.NewWindowRequested += (_, e) =>
+        coreWebView.NewWindowRequested += async (_, e) =>
         {
             string targetUri = e.Uri ?? string.Empty;
-            e.Handled = true;
 
-            // 백그라운드 동기화 중에만 설문/공지 팝업을 차단한다.
-            // 사용자가 브라우저 창에서 직접 탐색 중이면 결재 문서·공지 등 새 창 링크도 같은 창에서 연다.
-            if (!IsInteractiveBrowsing && IsBlockingSurveyOrPopupUrl(targetUri))
-                return;
-
-            if (!string.IsNullOrWhiteSpace(targetUri) &&
-                targetUri.Contains(BaseDomain, StringComparison.OrdinalIgnoreCase))
+            // 1. 백그라운드 동기화 중일 때는 팝업을 차단한다
+            if (!IsInteractiveBrowsing)
             {
-                coreWebView.Navigate(targetUri);
+                e.Handled = true;
+                return;
+            }
+
+            // 2. 외부 도메인 링크는 사용자의 기본 웹 브라우저(Edge, Chrome 등)로 전달
+            if (!string.IsNullOrWhiteSpace(targetUri) &&
+                !targetUri.Contains(BaseDomain, StringComparison.OrdinalIgnoreCase))
+            {
+                e.Handled = true;
+                try
+                {
+                    Process.Start(new ProcessStartInfo(targetUri) { UseShellExecute = true });
+                }
+                catch { }
+                return;
+            }
+
+            // 3. 사용자가 브라우저를 열어 직접 탐색 중일 때 발생하는 다우오피스 팝업(결재선 지정, 결재문서 보기 등)은
+            //    부모 창(작성 중인 결재 본문)을 덮어쓰지 않고 독립 보조 팝업 윈도우로 열어 window.opener 연동을 완벽히 보장한다.
+            var deferral = e.GetDeferral();
+            try
+            {
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(async () =>
+                {
+                    var popupWin = new Window
+                    {
+                        Title = "다우오피스",
+                        Width = 980,
+                        Height = 720,
+                        WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                        Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(9, 9, 11))
+                    };
+
+                    var popupWebView = new WebView2();
+                    popupWin.Content = popupWebView;
+                    popupWin.Show();
+
+                    var env = await GetOrCreateEnvironmentAsync();
+                    await popupWebView.EnsureCoreWebView2Async(env);
+
+                    // 팝업 내부에서 window.close() 호출 시 창 닫기
+                    popupWebView.CoreWebView2.WindowCloseRequested += (_, _) =>
+                    {
+                        popupWin.Close();
+                    };
+
+                    e.NewWindow = popupWebView.CoreWebView2;
+                });
+            }
+            catch
+            {
+                e.Handled = true;
+                if (!string.IsNullOrWhiteSpace(targetUri))
+                {
+                    coreWebView.Navigate(targetUri);
+                }
+            }
+            finally
+            {
+                deferral.Complete();
             }
         };
 
         coreWebView.DownloadStarting += (_, e) =>
         {
-            e.Cancel = true;
+            // 백그라운드 동기화 중에만 불필요한 자동 다운로드를 차단하고,
+            // 사용자가 브라우저를 직접 쓸 때는 결재 첨부파일 등의 다운로드를 허용한다.
+            if (!IsInteractiveBrowsing)
+            {
+                e.Cancel = true;
+            }
         };
 
         coreWebView.ScriptDialogOpening += (_, args) =>
         {
-            args.Accept();
+            // 백그라운드 동기화 중일 때만 다이얼로그(alert/confirm)로 인해 웹뷰가 멈추지 않도록 자동 수락.
+            // 사용자가 브라우저 창을 직접 보고 있을 때는 가로채지 않아 결재 상신 confirm 및 alert 등이 정상 작동하도록 한다.
+            if (!IsInteractiveBrowsing)
+            {
+                args.Accept();
+            }
         };
 
         coreWebView.SourceChanged += async (_, _) =>
@@ -766,6 +831,7 @@ public sealed class DaouAttendanceService
 
         try
         {
+            await DismissBlockingPopupsAndSurveysAsync(_webView.CoreWebView2);
             string rawResult = await _webView.CoreWebView2.ExecuteScriptAsync(script);
             string result = JsonSerializer.Deserialize<string>(rawResult) ?? "UNKNOWN";
 
@@ -818,6 +884,7 @@ public sealed class DaouAttendanceService
 
         try
         {
+            await DismissBlockingPopupsAndSurveysAsync(_webView.CoreWebView2);
             string rawResult = await _webView.CoreWebView2.ExecuteScriptAsync(script);
             string result = JsonSerializer.Deserialize<string>(rawResult) ?? "UNKNOWN";
 
@@ -1280,15 +1347,20 @@ public sealed class DaouAttendanceService
         (() => {
             let count = 0;
             const closeBtnSelectors = [
-                '.go_popup .btn_layer_x',
-                '.layer_normal .btn_layer_x',
                 '.layer_notice .btn_layer_x',
-                '[data-role="layerClose"]',
-                '.btn_popup_close',
-                '.survey_popup .close'
+                '.notice_popup .close',
+                '.notice_popup .btn_layer_x',
+                '.survey_popup .close',
+                '.survey_popup .btn_layer_x',
+                '[data-role="surveyClose"]',
+                '.btn_popup_close'
             ];
             for (const sel of closeBtnSelectors) {
                 document.querySelectorAll(sel).forEach(el => {
+                    // 전자결재, 메일, 조직도 등 업무 관련 모달 레이어 내부의 버튼은 절대 닫지 않는다
+                    if (el.closest('.layer_appr, [data-app="approval"], [id*="approval"], .appr_line_wrap, .approval_modal, .org_tree')) {
+                        return;
+                    }
                     try { el.click(); count++; } catch {}
                 });
             }
