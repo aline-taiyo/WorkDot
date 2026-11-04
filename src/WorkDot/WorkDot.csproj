@@ -13,6 +13,8 @@
     <FileVersion>$(Version).0</FileVersion>
     <Product>WorkDot</Product>
     <ApplicationIcon>Assets\Icons\workdot.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>

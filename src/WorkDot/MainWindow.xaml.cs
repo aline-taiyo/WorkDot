@@ -640,7 +640,14 @@ public partial class MainWindow : Window
                 }
                 if (confirmed)
                 {
-                    _ = ExecuteClockActionAsync(targetClockIn: true);
+                    if (snapshot.IsResumeWorkAvailable)
+                    {
+                        _ = ExecuteResumeWorkActionAsync();
+                    }
+                    else
+                    {
+                        _ = ExecuteClockActionAsync(targetClockIn: true);
+                    }
                 }
             }
 
@@ -860,7 +867,7 @@ public partial class MainWindow : Window
             if (!confirmed)
                 return;
 
-            await ExecuteClockActionAsync(targetClockIn: true);
+            await ExecuteResumeWorkActionAsync();
             return;
         }
 
@@ -894,11 +901,31 @@ public partial class MainWindow : Window
             if (!confirmed)
                 return;
 
-            await ExecuteClockActionAsync(targetClockIn: true);
+            await ExecuteResumeWorkActionAsync();
         }
         else
         {
             await ExecuteClockActionAsync(targetClockIn: true);
+        }
+    }
+
+    private async Task ExecuteResumeWorkActionAsync()
+    {
+        if (_isActionBusy)
+            return;
+
+        _isActionBusy = true;
+        ApplySettingsAndVisuals();
+
+        try
+        {
+            _attendanceService.SetManualStatusOverride(WorkStatusKind.Working);
+            await _attendanceService.TriggerResumeWorkActionAsync();
+        }
+        finally
+        {
+            _isActionBusy = false;
+            ApplySettingsAndVisuals();
         }
     }
 

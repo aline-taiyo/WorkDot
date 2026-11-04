@@ -1,12 +1,17 @@
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using WorkDot.Services;
 
 namespace WorkDot;
 
 public partial class AttendanceWebWindow : Window
 {
+    [DllImport("dwmapi.dll", PreserveSig = true)]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
     private readonly DaouAttendanceService _attendanceService;
     private readonly TaskCompletionSource<bool> _initTcs = new();
     private bool _isAppShuttingDown;
@@ -18,6 +23,16 @@ public partial class AttendanceWebWindow : Window
         InitializeComponent();
         _attendanceService = attendanceService;
         Closing += OnWindowClosing;
+        SourceInitialized += (_, _) =>
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd != IntPtr.Zero)
+            {
+                int darkMode = 1;
+                // DWMWA_USE_IMMERSIVE_DARK_MODE = 20 (Windows 10 1809+, Windows 11)
+                DwmSetWindowAttribute(hwnd, 20, ref darkMode, sizeof(int));
+            }
+        };
         IsVisibleChanged += (_, _) =>
         {
             // 창이 숨겨지면(닫기·동기화 후 닫기 등) 백그라운드 동기화 모드로 돌아간다

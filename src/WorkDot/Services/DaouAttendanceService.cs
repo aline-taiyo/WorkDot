@@ -967,6 +967,10 @@ public sealed class DaouAttendanceService
                     return (false, "다우오피스 추가 확인(근무지 선택 등)이 필요합니다.");
                 }
 
+                // 모달 승인 후 후속 완료 alert 또는 2차 팝업이 뜰 수 있으므로 500ms 후 한 번 더 확인 시도
+                await Task.Delay(500);
+                await _webView.CoreWebView2.ExecuteScriptAsync(GetConfirmModalClickScript());
+
                 await Task.Delay(1000);
                 await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
 
@@ -2130,27 +2134,41 @@ public sealed class DaouAttendanceService
                 if (t === '업무복귀' || t === '업무 시작' || t === '근무재개' || t === '업무재개' || t === '복귀') {
                     if (!btn.disabled) {
                         btn.click();
+                        try { btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); } catch {}
                         return 'OK:DIRECT_RETURN:' + t;
                     }
                 }
             }
 
-            // 3. '근무상태변경' 드롭다운 버튼 클릭
-            const changeBtn = document.querySelector('.wrap_lnb_btn button, .attend_btn .wrap_lnb_btn button');
-            if (changeBtn) {
-                changeBtn.click();
-            }
+            // 3. '업무' 메뉴 아이템 탐색 헬퍼
+            const findWorkItem = () => {
+                const items = Array.from(document.querySelectorAll('.wrap_lnb_btn .menu_item, .select_list .menu_item, .list_menu button, [aria-controls="settings-modal"]'));
+                return items.find(el => {
+                    const txtSpan = el.querySelector('.critical .txt, .txt');
+                    const spanText = clean(txtSpan ? txtSpan.innerText : '');
+                    if (spanText === '업무' || spanText.startsWith('업무')) return true;
+                    const fullText = clean(el.innerText);
+                    return fullText.includes('업무') || fullText.includes('정상근무') || fullText.includes('복귀');
+                });
+            };
 
-            // 4. '업무' 메뉴 아이템 찾기 및 클릭
-            const items = Array.from(document.querySelectorAll('.wrap_lnb_btn .menu_item, .select_list .menu_item, .list_menu button, .attend_btn button'));
-            const workItem = items.find(el => {
-                const t = clean(el.innerText);
-                return t === '업무' || t.startsWith('업무') || t === '정상근무' || t.includes('복귀');
-            });
+            let workItem = findWorkItem();
+
+            // 4. 메뉴 아이템이 보이지 않거나 없는 경우 '근무상태변경' 드롭다운 버튼 클릭
+            if (!workItem || workItem.offsetParent === null) {
+                const changeBtn = document.querySelector('.wrap_lnb_btn button, .attend_btn .wrap_lnb_btn button');
+                if (changeBtn) {
+                    changeBtn.click();
+                }
+                workItem = findWorkItem();
+            }
 
             if (workItem) {
                 if (workItem.disabled) return 'DISABLED:업무';
                 workItem.click();
+                try {
+                    workItem.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                } catch {}
                 return 'OK:WORK_CLICKED';
             }
 
@@ -2289,19 +2307,18 @@ public sealed class DaouAttendanceService
         (() => {
             const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
 
-            // 1. 다우오피스 EHR React 다이얼로그 (.dop_dialog.open) 처리
-            const dopDialog = document.querySelector('.dop_dialog.open, [role="dialog"], #settings-modal, .go_popup');
+            // 1. 다우오피스 EHR React 다이얼로그 (.dop_dialog.open) 및 모달 처리
+            const dopDialog = document.querySelector('.dop_dialog.open, .dop_dialog, [role="dialog"], #settings-modal, .go_popup');
             if (dopDialog) {
-                const radios = Array.from(dopDialog.querySelectorAll('.dop_radio input[type="radio"]'));
-                if (radios.length === 1 && !radios[0].checked) {
+                const radios = Array.from(dopDialog.querySelectorAll('.dop_radio input[type="radio"], input[type="radio"]'));
+                if (radios.length > 0 && !radios.some(r => r.checked)) {
                     radios[0].click();
-                } else if (radios.length > 1 && !radios.some(r => r.checked)) {
-                    return 'NEEDS_USER_INPUT:WORK_LOCATION';
                 }
 
                 const majorBtn = dopDialog.querySelector('.popup_btn_area button.solid.major, button.solid.major, .btn_major, .btn_major_s');
                 if (majorBtn && !majorBtn.disabled) {
                     majorBtn.click();
+                    try { majorBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); } catch {}
                     return 'CONFIRMED:DOP_DIALOG';
                 }
 
@@ -2310,6 +2327,7 @@ public sealed class DaouAttendanceService
                     const t = clean(btn.innerText);
                     if ((t === '확인' || t === '예' || t === '변경' || t === '출근' || t === '퇴근' || t === '휴게' || t === '업무') && !btn.disabled) {
                         btn.click();
+                        try { btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); } catch {}
                         return 'CONFIRMED:' + t;
                     }
                 }
