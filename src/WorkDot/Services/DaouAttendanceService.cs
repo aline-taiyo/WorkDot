@@ -213,9 +213,9 @@ public sealed class DaouAttendanceService
     public bool IsInteractiveBrowsing { get; set; }
 
     public AttendanceSnapshot CurrentSnapshot { get; private set; } = new(
-        WorkStatusKind.OffWork,
-        "퇴근 (연동 대기)",
-        "그룹웨어 동기화 중...",
+        WorkStatusKind.Unknown,
+        "확인 중...",
+        "다우오피스 로그인 및 근태 동기화 중",
         null,
         null,
         null,
@@ -225,7 +225,6 @@ public sealed class DaouAttendanceService
 
     public DaouAttendanceService()
     {
-        TryRestoreTodaySnapshotFromCache();
     }
 
     private void TryRestoreTodaySnapshotFromCache()
@@ -382,6 +381,25 @@ public sealed class DaouAttendanceService
             }
         };
 
+        coreWebView.ProcessFailed += async (_, args) =>
+        {
+            try
+            {
+                // 렌더 프로세스 종료, 응답 없음, GPU 프로세스 실패 등으로 검은 화면이 되었을 때 자동 복구
+                if (args.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessExited ||
+                    args.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessUnresponsive ||
+                    args.ProcessFailedKind == CoreWebView2ProcessFailedKind.FrameRenderProcessExited)
+                {
+                    await Task.Delay(300);
+                    coreWebView.Reload();
+                }
+            }
+            catch
+            {
+                // Ignore secondary recovery exceptions
+            }
+        };
+
         coreWebView.NewWindowRequested += async (_, e) =>
         {
             string targetUri = e.Uri ?? string.Empty;
@@ -395,7 +413,8 @@ public sealed class DaouAttendanceService
 
             // 2. 외부 도메인 링크는 사용자의 기본 웹 브라우저(Edge, Chrome 등)로 전달
             if (!string.IsNullOrWhiteSpace(targetUri) &&
-                !targetUri.Contains(BaseDomain, StringComparison.OrdinalIgnoreCase))
+                !targetUri.Contains(BaseDomain, StringComparison.OrdinalIgnoreCase) &&
+                !targetUri.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
             {
                 e.Handled = true;
                 try
@@ -406,42 +425,45 @@ public sealed class DaouAttendanceService
                 return;
             }
 
-            // 3. 사용자가 브라우저를 열어 직접 탐색 중일 때 발생하는 다우오피스 팝업(결재선 지정, 결재문서 보기 등)은
-            //    부모 창(작성 중인 결재 본문)을 덮어쓰지 않고 독립 보조 팝업 윈도우로 열어 window.opener 연동을 완벽히 보장한다.
+            // 3. 다우오피스 팝업(초과근로 신청서, 결재선 지정, 결재문서 보기 등)은
+            //    부모 창을 덮어쓰지 않고 독립 보조 윈도우로 열어 window.opener 및 상호작용을 정상 보장한다.
             var deferral = e.GetDeferral();
             try
             {
-                await System.Windows.Application.Current.Dispatcher.InvokeAsync(async () =>
+                var popupWin = new Window
                 {
-                    var popupWin = new Window
-                    {
-                        Title = "다우오피스",
-                        Width = 980,
-                        Height = 720,
-                        WindowStartupLocation = WindowStartupLocation.CenterScreen,
-                        Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(9, 9, 11))
-                    };
+                    Title = "다우오피스",
+                    Width = 1000,
+                    Height = 760,
+                    WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                    Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(9, 9, 11))
+                };
 
-                    var popupWebView = new WebView2();
-                    popupWin.Content = popupWebView;
-                    popupWin.Show();
+                var popupWebView = new WebView2();
+                popupWin.Content = popupWebView;
+                popupWin.Show();
 
-                    var env = await GetOrCreateEnvironmentAsync();
-                    await popupWebView.EnsureCoreWebView2Async(env);
+                var env = await GetOrCreateEnvironmentAsync();
+                await popupWebView.EnsureCoreWebView2Async(env);
 
-                    // 팝업 내부에서 window.close() 호출 시 창 닫기
-                    popupWebView.CoreWebView2.WindowCloseRequested += (_, _) =>
-                    {
-                        popupWin.Close();
-                    };
+                // 팝업 내부에서 window.close() 호출 시 창 닫기
+                popupWebView.CoreWebView2.WindowCloseRequested += (_, _) =>
+                {
+                    popupWin.Close();
+                };
 
-                    e.NewWindow = popupWebView.CoreWebView2;
-                });
+                popupWin.Closed += (_, _) =>
+                {
+                    try { popupWebView.Dispose(); } catch { }
+                };
+
+                e.NewWindow = popupWebView.CoreWebView2;
+                e.Handled = true;
             }
             catch
             {
                 e.Handled = true;
-                if (!string.IsNullOrWhiteSpace(targetUri))
+                if (!string.IsNullOrWhiteSpace(targetUri) && !targetUri.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
                 {
                     coreWebView.Navigate(targetUri);
                 }
@@ -478,6 +500,14 @@ public sealed class DaouAttendanceService
             if (IsLoginUrl(current))
             {
                 _pendingAttendanceRedirect = true;
+                UpdateSnapshot(new AttendanceSnapshot(
+                    WorkStatusKind.NeedsLogin,
+                    "로그인 필요",
+                    "클릭하여 다우오피스 로그인 / 2차 인증 완료",
+                    null,
+                    null,
+                    null,
+                    DateTime.Now));
                 return;
             }
 
@@ -494,19 +524,17 @@ public sealed class DaouAttendanceService
             string url = coreWebView.Source ?? string.Empty;
             if (IsLoginUrl(url))
             {
-                // 저장된 자격증명이 있으면 백그라운드 자동 로그인 시도
-                bool autoLoggedIn = await TryAutoLoginIfPossibleAsync(coreWebView);
-                if (!autoLoggedIn)
-                {
-                    UpdateSnapshot(new AttendanceSnapshot(
-                        WorkStatusKind.NeedsLogin,
-                        "퇴근 · 로그인 필요",
-                        "클릭하여 다우오피스 로그인 (1회 로그인 시 자동 유지)",
-                        null,
-                        null,
-                        null,
-                        DateTime.Now));
-                }
+                UpdateSnapshot(new AttendanceSnapshot(
+                    WorkStatusKind.NeedsLogin,
+                    "로그인 필요",
+                    "클릭하여 다우오피스 로그인 / 2차 인증 완료",
+                    null,
+                    null,
+                    null,
+                    DateTime.Now));
+
+                // 저장된 자격증명이 있으면 백그라운드 1차 자동 로그인 시도
+                await TryAutoLoginIfPossibleAsync(coreWebView);
                 return;
             }
 
@@ -1221,13 +1249,18 @@ public sealed class DaouAttendanceService
                 // Ignore file lock
             }
 
-            bool isLogin = root.TryGetProperty("isLoginPage", out var loginProp) && loginProp.GetBoolean();
+            string probeUrl = root.TryGetProperty("url", out var urlProp) ? (urlProp.GetString() ?? "") : "";
+            string currentSrc = _webView?.CoreWebView2?.Source ?? string.Empty;
+            bool isLogin = (root.TryGetProperty("isLoginPage", out var loginProp) && loginProp.GetBoolean()) ||
+                           IsLoginUrl(probeUrl) ||
+                           IsLoginUrl(currentSrc);
+
             if (isLogin)
             {
                 UpdateSnapshot(new AttendanceSnapshot(
                     WorkStatusKind.NeedsLogin,
-                    "퇴근 · 로그인 필요",
-                    "클릭하여 다우오피스 로그인 (1회 로그인 시 자동 유지)",
+                    "로그인 필요",
+                    "클릭하여 다우오피스 로그인 / 2차 인증 완료",
                     null,
                     null,
                     null,
@@ -1407,7 +1440,13 @@ public sealed class DaouAttendanceService
             return false;
 
         return url.Contains("/login", StringComparison.OrdinalIgnoreCase) ||
-               url.Contains("sso", StringComparison.OrdinalIgnoreCase);
+               url.Contains("sso", StringComparison.OrdinalIgnoreCase) ||
+               url.Contains("/auth", StringComparison.OrdinalIgnoreCase) ||
+               url.Contains("/otp", StringComparison.OrdinalIgnoreCase) ||
+               url.Contains("twofactor", StringComparison.OrdinalIgnoreCase) ||
+               url.Contains("2fa", StringComparison.OrdinalIgnoreCase) ||
+               url.Contains("mfa", StringComparison.OrdinalIgnoreCase) ||
+               url.Contains("alliance-v2", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string GetDocumentCreatedHookScript() => """
@@ -1530,6 +1569,14 @@ public sealed class DaouAttendanceService
                     try { el.click(); count++; } catch {}
                 });
             }
+
+            // 본문 없이 화면을 검게 가리고 있는 잔여 딤 레이어(.layer_dimm, .dimm 등) 정리
+            document.querySelectorAll('.layer_dimm, .dimm, .layer_backdrop, .modal-backdrop, [class*="dimm"]').forEach(dim => {
+                if (!document.querySelector('.layer_normal, .layer_doc, .layer_appr, .approval_modal, [data-app="approval"]')) {
+                    try { dim.remove(); count++; } catch {}
+                }
+            });
+
             return count;
         })();
         """;
@@ -1540,7 +1587,27 @@ public sealed class DaouAttendanceService
                 const url = location.href;
                 const urlLower = url.toLowerCase();
 
-                if (urlLower.includes('/login') || document.querySelector('input[type="password"]')) {
+                // 1. 다우오피스 정상 근태 화면 UI 요소(가젯, 실시간 시계, 상단 메뉴)가 있는지 확인
+                const hasEhrAttendUi = Boolean(document.querySelector('.lnb_gadget.gadget_attend, .attend_card, #timelineClock, .wrap_today_time'));
+
+                // 2. 로그인 또는 2차 인증 페이지 여부 정밀 감지
+                const isAuthUrl = urlLower.includes('/login') ||
+                                  urlLower.includes('/auth') ||
+                                  urlLower.includes('/otp') ||
+                                  urlLower.includes('/twofactor') ||
+                                  urlLower.includes('2fa') ||
+                                  urlLower.includes('mfa') ||
+                                  urlLower.includes('sso') ||
+                                  urlLower.includes('alliance-v2');
+
+                const hasPasswordInput = Boolean(document.querySelector('input[type="password"]'));
+                const hasOtpOrAuthInput = Boolean(document.querySelector(
+                    'input[name*="otp" i], input[id*="otp" i], input[name*="authCode" i], input[id*="authCode" i], input[name*="cert" i], input[id*="cert" i], input[autocomplete="one-time-code"], input[placeholder*="인증" i], input[placeholder*="OTP" i]'
+                ));
+                const hasLoginBtn = Boolean(document.querySelector('#login_submit, #btnLogin, .btn_login, #btn_submit, [data-role="login"]'));
+
+                // 정상 근태 UI가 로드되지 않은 상태에서 로그인 URL이거나 로그인/2차인증 폼이 보이면 100% 로그인 미완료!
+                if (!hasEhrAttendUi && (isAuthUrl || hasPasswordInput || hasOtpOrAuthInput || hasLoginBtn)) {
                     return JSON.stringify({ isLoginPage: true, url });
                 }
 

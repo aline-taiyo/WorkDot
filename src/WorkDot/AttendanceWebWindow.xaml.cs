@@ -93,6 +93,23 @@ public partial class AttendanceWebWindow : Window
         _attendanceService.IsInteractiveBrowsing = true;
 
         await EnsureWebViewReadyAsync();
+
+        // 브라우저 창을 열었을 때 웹뷰가 검은 화면(크래시 또는 멈춤) 상태인지 헬스체크하고 필요 시 즉각 복구
+        if (PortalWebView.CoreWebView2 != null)
+        {
+            try
+            {
+                var task = PortalWebView.CoreWebView2.ExecuteScriptAsync("1");
+                if (await Task.WhenAny(task, Task.Delay(500)) != task)
+                {
+                    PortalWebView.CoreWebView2.Reload();
+                }
+            }
+            catch
+            {
+                try { PortalWebView.CoreWebView2.Reload(); } catch { }
+            }
+        }
     }
 
     public void ShutdownClose()
@@ -176,7 +193,14 @@ public partial class AttendanceWebWindow : Window
 
     private void OnReloadClick(object sender, RoutedEventArgs e)
     {
-        PortalWebView.CoreWebView2?.Reload();
+        try
+        {
+            PortalWebView.CoreWebView2?.Reload();
+        }
+        catch
+        {
+            try { PortalWebView.Reload(); } catch { }
+        }
     }
 
     private async void OnDismissPopupsClick(object sender, RoutedEventArgs e)
@@ -194,9 +218,34 @@ public partial class AttendanceWebWindow : Window
         }
     }
 
-    private void OnGoHomeClick(object sender, RoutedEventArgs e)
+    private async void OnGoHomeClick(object sender, RoutedEventArgs e)
     {
-        PortalWebView.CoreWebView2?.Navigate(DaouAttendanceService.TargetAttendanceUrl);
+        if (PortalWebView.CoreWebView2 == null)
+            return;
+
+        try
+        {
+            // 화면을 가로막는 딤 레이어 정리
+            await PortalWebView.CoreWebView2.ExecuteScriptAsync("""
+                (() => {
+                    document.querySelectorAll('.layer_dimm, .dimm, .backdrop, [class*="dimm"]').forEach(el => el.remove());
+                })();
+            """);
+
+            string current = PortalWebView.CoreWebView2.Source ?? string.Empty;
+            if (current.Contains("/ehr/app/attend", StringComparison.OrdinalIgnoreCase))
+            {
+                PortalWebView.CoreWebView2.Reload();
+            }
+            else
+            {
+                PortalWebView.CoreWebView2.Navigate(DaouAttendanceService.TargetAttendanceUrl);
+            }
+        }
+        catch
+        {
+            try { PortalWebView.CoreWebView2.Reload(); } catch { }
+        }
     }
 
     private async void OnSyncAndCloseClick(object sender, RoutedEventArgs e)

@@ -52,6 +52,7 @@ public sealed class TaskbarTrayService : IDisposable
         {
             WorkStatusKind.Working => "근무중",
             WorkStatusKind.Break => "휴게",
+            WorkStatusKind.NeedsLogin => "로그인 필요",
             _ => "퇴근"
         };
 
