@@ -166,6 +166,7 @@ public partial class MainWindow : Window
 
     private void OnIdleTimerTick(object? sender, EventArgs e)
     {
+        _attendanceService.CheckDateRollover();
         var snapshot = _attendanceService.CurrentSnapshot;
         bool isWorkingOrBreak = snapshot.Status == WorkStatusKind.Working || snapshot.Status == WorkStatusKind.Break;
         int currentWorkedMin = (int)(snapshot.GetWorkingElapsedSpanExcludingBreaks(DateTime.Now)?.TotalMinutes ?? -1);
@@ -291,9 +292,13 @@ public partial class MainWindow : Window
         string? elapsedText = isWorkingOrBreak ? FormatWorkingElapsedTime(snapshot) : null;
         int pct = (int)Math.Round(gaugeRatio * 100);
         string stateTitle = isBreak ? "휴게" : (isWorking ? "근무중" : "퇴근");
+        bool isResume = snapshot.IsResumeWorkAvailable;
+        string offWorkActionHint = isResume
+            ? "더블클릭/길게 눌러 업무 복귀"
+            : "더블클릭/길게 눌러 출근";
         string actionHint = isBreak
             ? "더블클릭: 근무중 전환 · 길게 눌러 퇴근"
-            : (isWorking ? "더블클릭: 휴게 전환 · 길게 눌러 퇴근" : "길게 눌러 출근");
+            : (isWorking ? "더블클릭: 휴게 전환 · 길게 눌러 퇴근" : offWorkActionHint);
         StatusBadgeBorder.ToolTip = isWorkingOrBreak && !string.IsNullOrWhiteSpace(elapsedText)
             ? $"{stateTitle} ({elapsedText} / 08:00 · {pct}%) · {snapshot.SubText} ({actionHint})"
             : $"{stateTitle} · {snapshot.SubText} ({actionHint})";
@@ -621,6 +626,23 @@ public partial class MainWindow : Window
                     _ = ExecuteBreakActionAsync(false);
                 }
             }
+            else if (curStatus == WorkStatusKind.OffWork)
+            {
+                var snapshot = _attendanceService.CurrentSnapshot;
+                string message = snapshot.IsResumeWorkAvailable
+                    ? "추가 업무 진행하는 건가요?"
+                    : "출근 할래요?";
+                var confirmPopup = new ConfirmClockOutWindow(this, message, "#10B981");
+                bool confirmed = confirmPopup.ShowDialog() == true && confirmPopup.IsConfirmed;
+                if (!IsMouseOver && !_isPointerDown)
+                {
+                    SetExpandedMode(false);
+                }
+                if (confirmed)
+                {
+                    _ = ExecuteClockActionAsync(targetClockIn: true);
+                }
+            }
 
             e.Handled = true;
             return;
@@ -826,7 +848,23 @@ public partial class MainWindow : Window
             return;
         }
 
-        // 퇴근 상태에서 다시 꾹 누르고 위젯 안에서 떼면 팝업 없이 출근으로 바로 변경
+        // 퇴근 상태에서 업무 복귀가 가능한 경우(퇴근 -> 업무) "추가 업무 진행하는 건가요?" 팝업으로 실수 방지
+        if (snapshot.IsResumeWorkAvailable)
+        {
+            var confirmPopup = new ConfirmClockOutWindow(this, "추가 업무 진행하는 건가요?", "#10B981");
+            bool confirmed = confirmPopup.ShowDialog() == true && confirmPopup.IsConfirmed;
+            if (!IsMouseOver && !_isPointerDown)
+            {
+                SetExpandedMode(false);
+            }
+            if (!confirmed)
+                return;
+
+            await ExecuteClockActionAsync(targetClockIn: true);
+            return;
+        }
+
+        // 퇴근 상태에서 첫 출근 시 꾹 누르고 위젯 안에서 떼면 팝업 없이 출근으로 바로 변경
         await ExecuteClockActionAsync(targetClockIn: true);
     }
 
@@ -848,6 +886,15 @@ public partial class MainWindow : Window
                 return;
 
             await ExecuteClockActionAsync(targetClockIn: false);
+        }
+        else if (snapshot.IsResumeWorkAvailable)
+        {
+            var confirmPopup = new ConfirmClockOutWindow(this, "추가 업무 진행하는 건가요?", "#10B981");
+            bool confirmed = confirmPopup.ShowDialog() == true && confirmPopup.IsConfirmed;
+            if (!confirmed)
+                return;
+
+            await ExecuteClockActionAsync(targetClockIn: true);
         }
         else
         {
@@ -904,10 +951,19 @@ public partial class MainWindow : Window
         MenuAlwaysOnTop.IsChecked = _settingsService.Current.AlwaysOnTop;
         MenuRunAtStartup.IsChecked = _settingsService.Current.RunAtStartup;
 
-        var status = _attendanceService.CurrentSnapshot.Status;
-        MenuClockActionItem.Header = status == WorkStatusKind.NeedsLogin
-            ? "다우오피스 로그인..."
-            : (status == WorkStatusKind.Working ? "퇴근하기" : "출근하기");
+        var snapshot = _attendanceService.CurrentSnapshot;
+        if (snapshot.Status == WorkStatusKind.NeedsLogin)
+        {
+            MenuClockActionItem.Header = "다우오피스 로그인...";
+        }
+        else if (snapshot.Status == WorkStatusKind.Working)
+        {
+            MenuClockActionItem.Header = "퇴근하기";
+        }
+        else
+        {
+            MenuClockActionItem.Header = snapshot.IsResumeWorkAvailable ? "업무 복귀" : "출근하기";
+        }
     }
 
     private void OnOpenSettingsClick(object sender, RoutedEventArgs e)

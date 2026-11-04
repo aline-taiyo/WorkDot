@@ -29,12 +29,35 @@ public sealed record AttendanceSnapshot(
     string? WorkedDurationText,
     DateTime UpdatedAt,
     IReadOnlyList<BreakTimeWindow>? BreakWindows = null,
-    DateTime? ActiveBreakStart = null)
+    DateTime? ActiveBreakStart = null,
+    bool CanClockIn = false,
+    bool CanResumeWork = false)
 {
     private static readonly IReadOnlyList<BreakTimeWindow> DefaultBreakWindows =
     [
         new BreakTimeWindow(new TimeSpan(12, 0, 0), new TimeSpan(13, 0, 0))
     ];
+
+    /// <summary>
+    /// 오늘 날짜(DateTime.Today) 기준으로 유효한 출근 기록이 존재하는지 여부.
+    /// 스냅샷 날짜가 오늘이 아니거나 출근 시각이 없으면 false입니다.
+    /// </summary>
+    public bool HasClockedInToday =>
+        UpdatedAt.Date == DateTime.Today && !string.IsNullOrWhiteSpace(ClockInTimeText);
+
+    /// <summary>
+    /// 다우오피스 근태 페이지에서 출근상태로 변경(첫 출근)이 가능한지 여부.
+    /// 출근하기 버튼이 활성화되어 있거나 출근 상태 변경이 가능한 경우 true.
+    /// </summary>
+    public bool IsClockInAvailable =>
+        Status == WorkStatusKind.OffWork && (CanClockIn || (!CanResumeWork && !HasClockedInToday));
+
+    /// <summary>
+    /// 다우오피스 근태 페이지에서 퇴근 상태에서 '업무' 상태로 전환할 수 있는지 여부.
+    /// 다우오피스 근무상태변경 목록에 '업무'가 있거나 당일 출근 이력이 있고 출근 버튼이 비활성화된 경우 true.
+    /// </summary>
+    public bool IsResumeWorkAvailable =>
+        Status == WorkStatusKind.OffWork && (CanResumeWork || (HasClockedInToday && !CanClockIn));
 
     /// <summary>
     /// 다우오피스에서 수집된 출근 시각 및 휴게시간(fixedBreakTimeList / 기본 12:00~13:00 / 사용자 수동 휴게)을 바탕으로
@@ -141,12 +164,44 @@ public sealed class DaouAttendanceService
     private CoreWebView2Environment? _env;
     private WebView2? _webView;
     private bool _isInitialized;
+    private DateTime _lastKnownDate = DateTime.Today;
     private DateTime _lastAutoLoginAttempt = DateTime.MinValue;
     private WorkStatusKind? _manualStatusOverride;
     private DateTime _manualOverrideDate;
     private DateTime? _activeBreakStartTime;
     private DateTime _userBreaksDate = DateTime.Today;
     private readonly List<BreakTimeWindow> _userBreakWindowsToday = new();
+
+    /// <summary>
+    /// 자정이 지나 날짜가 변경되었을 때(어제 -> 오늘) 어제의 출퇴근/휴게 상태를 깨끗이 리셋하고,
+    /// 다우오피스 웹뷰를 새 날의 근태 페이지로 새로고침하여 다음날 첫 출근을 준비합니다.
+    /// </summary>
+    public void CheckDateRollover()
+    {
+        if (DateTime.Today != _lastKnownDate)
+        {
+            _lastKnownDate = DateTime.Today;
+            _userBreaksDate = DateTime.Today;
+            _userBreakWindowsToday.Clear();
+            _manualStatusOverride = null;
+            _manualOverrideDate = DateTime.MinValue;
+            _activeBreakStartTime = null;
+
+            UpdateSnapshot(new AttendanceSnapshot(
+                WorkStatusKind.OffWork,
+                "퇴근",
+                "출근 전",
+                null,
+                null,
+                null,
+                DateTime.Now));
+
+            if (_webView?.CoreWebView2 != null && !IsInteractiveBrowsing)
+            {
+                _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
+            }
+        }
+    }
 
     // 로그인 직후 다우오피스가 홈(/app/home 등)으로 보내는 경우에만 근태 페이지로 1회 되돌리기 위한 플래그
     private bool _pendingAttendanceRedirect = true;
@@ -791,6 +846,8 @@ public sealed class DaouAttendanceService
 
     public async Task RefreshStatusAsync()
     {
+        CheckDateRollover();
+
         if (_webView?.CoreWebView2 == null)
             return;
 
@@ -814,6 +871,14 @@ public sealed class DaouAttendanceService
 
     public async Task<(bool Success, string Message)> TriggerClockActionAsync(bool clockIn)
     {
+        CheckDateRollover();
+
+        // 다우오피스 근태 페이지에서 업무 상태로 전환 가능한 경우(퇴근 -> 업무) -> 업무 복귀 실행
+        if (clockIn && CurrentSnapshot.IsResumeWorkAvailable)
+        {
+            return await TriggerResumeWorkActionAsync();
+        }
+
         if (_webView?.CoreWebView2 == null)
             return (false, "WebView2가 아직 초기화되지 않았습니다.");
 
@@ -858,6 +923,69 @@ public sealed class DaouAttendanceService
             }
 
             return (false, $"다우오피스 페이지에서 {(clockIn ? "출근" : "퇴근")} 버튼을 찾지 못했습니다 ({result}). 그룹웨어 창에서 직접 확인해주세요.");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"처리 중 오류: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 오늘 이미 출근 후 퇴근한 상태에서 다시 업무를 시작할 때,
+    /// 비활성화된 출근 버튼 대신 다우오피스의 '근무상태변경' -> '업무' 메뉴를 트리거합니다.
+    /// </summary>
+    public async Task<(bool Success, string Message)> TriggerResumeWorkActionAsync()
+    {
+        CheckDateRollover();
+
+        if (_webView?.CoreWebView2 == null)
+            return (false, "WebView2가 아직 초기화되지 않았습니다.");
+
+        string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
+        if (IsLoginUrl(currentUrl) || !currentUrl.Contains("/ehr/", StringComparison.OrdinalIgnoreCase))
+        {
+            _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
+            await Task.Delay(1800);
+            currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
+            if (IsLoginUrl(currentUrl))
+                return (false, "그룹웨어 로그인이 필요합니다. 로그인 창을 열어주세요.");
+        }
+
+        try
+        {
+            await DismissBlockingPopupsAndSurveysAsync(_webView.CoreWebView2);
+            string rawResult = await _webView.CoreWebView2.ExecuteScriptAsync(GetResumeWorkTriggerScript());
+            string result = JsonSerializer.Deserialize<string>(rawResult) ?? "UNKNOWN";
+
+            if (result.StartsWith("OK:", StringComparison.Ordinal))
+            {
+                await Task.Delay(600);
+                string modalRaw = await _webView.CoreWebView2.ExecuteScriptAsync(GetConfirmModalClickScript());
+                string modalRes = JsonSerializer.Deserialize<string>(modalRaw) ?? "NO_MODAL";
+                if (modalRes.StartsWith("NEEDS_USER_INPUT", StringComparison.Ordinal))
+                {
+                    return (false, "다우오피스 추가 확인(근무지 선택 등)이 필요합니다.");
+                }
+
+                await Task.Delay(1000);
+                await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
+
+                return (true, "업무 상태로 전환되었습니다.");
+            }
+
+            if (result.StartsWith("ALREADY_WORKING", StringComparison.Ordinal))
+            {
+                await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
+                return (true, "이미 업무(근무중) 상태입니다.");
+            }
+
+            if (result.StartsWith("DISABLED:", StringComparison.Ordinal))
+            {
+                await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
+                return (true, "업무 상태로 전환할 수 없는 상태입니다.");
+            }
+
+            return (false, $"다우오피스에서 업무 상태 변경 메뉴를 찾지 못했습니다 ({result}). 그룹웨어 창에서 직접 확인해주세요.");
         }
         catch (Exception ex)
         {
@@ -932,6 +1060,8 @@ public sealed class DaouAttendanceService
 
     public void SetManualStatusOverride(WorkStatusKind status)
     {
+        CheckDateRollover();
+
         if (_userBreaksDate != DateTime.Today)
         {
             _userBreaksDate = DateTime.Today;
@@ -949,6 +1079,19 @@ public sealed class DaouAttendanceService
             _activeBreakStartTime = null;
         }
 
+        // 다우오피스 업무 상태로 전환 가능한 경우(퇴근 -> 업무 복귀 시), 이전 퇴근 시각부터 현재 복귀 시각까지의 공백을 휴게 구간으로 추가
+        if (CurrentSnapshot.Status == WorkStatusKind.OffWork && status == WorkStatusKind.Working && CurrentSnapshot.IsResumeWorkAvailable)
+        {
+            if (TimeSpan.TryParse(CurrentSnapshot.ClockOutTimeText, out TimeSpan offTime))
+            {
+                TimeSpan nowTimeSpan = DateTime.Now.TimeOfDay;
+                if (nowTimeSpan > offTime)
+                {
+                    _userBreakWindowsToday.Add(new BreakTimeWindow(offTime, nowTimeSpan));
+                }
+            }
+        }
+
         _manualStatusOverride = status;
         _manualOverrideDate = DateTime.Today;
 
@@ -958,7 +1101,9 @@ public sealed class DaouAttendanceService
         if (status == WorkStatusKind.Break)
         {
             _activeBreakStartTime ??= DateTime.Now;
-            string breakClockIn = CurrentSnapshot.ClockInTimeText ?? GetCachedClockInToday() ?? nowTime;
+            string breakClockIn = CurrentSnapshot.HasClockedInToday
+                ? (CurrentSnapshot.ClockInTimeText ?? nowTime)
+                : (GetCachedClockInToday() ?? nowTime);
             UpdateSnapshot(new AttendanceSnapshot(
                 WorkStatusKind.Break,
                 "휴게",
@@ -972,7 +1117,10 @@ public sealed class DaouAttendanceService
         }
         else if (status == WorkStatusKind.Working)
         {
-            string workClockIn = CurrentSnapshot.ClockInTimeText ?? GetCachedClockInToday() ?? nowTime;
+            // 업무 복귀면 이전 출근 시각 유지, 첫 출근이면 현재 시각
+            string workClockIn = CurrentSnapshot.IsResumeWorkAvailable
+                ? (CurrentSnapshot.ClockInTimeText ?? nowTime)
+                : nowTime;
             UpdateSnapshot(new AttendanceSnapshot(
                 WorkStatusKind.Working,
                 "근무중",
@@ -1089,6 +1237,15 @@ public sealed class DaouAttendanceService
             }
 
             string state = root.TryGetProperty("state", out var sProp) ? (sProp.GetString() ?? "UNKNOWN") : "UNKNOWN";
+            if (state == "PAGE_OUTDATED_NEEDS_RELOAD")
+            {
+                if (_webView?.CoreWebView2 != null && !IsInteractiveBrowsing)
+                {
+                    _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
+                }
+                return;
+            }
+
             if (state == "LOADING" || state == "UNKNOWN")
                 return;
 
@@ -1096,6 +1253,8 @@ public sealed class DaouAttendanceService
             string? clockOut = root.TryGetProperty("clockOut", out var outProp) ? outProp.GetString() : null;
             string? duration = root.TryGetProperty("duration", out var durProp) ? durProp.GetString() : null;
             string? badgeText = root.TryGetProperty("badgeText", out var bProp) ? bProp.GetString() : null;
+            bool canClockIn = root.TryGetProperty("canClockIn", out var cInProp) && cInProp.GetBoolean();
+            bool canResumeWork = root.TryGetProperty("canResumeWork", out var cResProp) && cResProp.GetBoolean();
 
             List<BreakTimeWindow>? breakWindows = null;
             if (root.TryGetProperty("breakRanges", out var brProp) && brProp.ValueKind == JsonValueKind.Array)
@@ -1220,7 +1379,10 @@ public sealed class DaouAttendanceService
                     clockOut,
                     duration,
                     DateTime.Now,
-                    breakWindows));
+                    breakWindows,
+                    null,
+                    canClockIn,
+                    canResumeWork));
             }
         }
         catch
@@ -1431,6 +1593,21 @@ public sealed class DaouAttendanceService
                 for (const doc of docs) {
                     const gadget = doc.querySelector('.lnb_gadget.gadget_attend, .attend_card');
                     if (!gadget) continue;
+
+                    // 가젯 헤더의 날짜 확인 (예: "2026년 11월 04일")
+                    const timeEl = gadget.querySelector('.wrap_today_time .today_time, .today_time');
+                    const dateTxt = clean(timeEl?.innerText || '');
+                    if (dateTxt) {
+                        const mMonth = dateTxt.match(/(\d{1,2})월/);
+                        const mDay = dateTxt.match(/(\d{1,2})일/);
+                        if (mMonth && mDay) {
+                            const gMonth = pad2(parseInt(mMonth[1], 10));
+                            const gDay = pad2(parseInt(mDay[1], 10));
+                            if (gMonth !== mm || gDay !== dd) {
+                                return JSON.stringify({ state: 'PAGE_OUTDATED_NEEDS_RELOAD', url });
+                            }
+                        }
+                    }
 
                     const tag = gadget.querySelector('.gadget_header .basic_tag, .card_header .basic_tag');
                     if (tag) {
@@ -1709,7 +1886,7 @@ public sealed class DaouAttendanceService
                     }
 
                     const statusEls = Array.from(doc.querySelectorAll(
-                        'select option:checked, .state, .status, .badge, .chip, .txt_state, .btn_state'
+                        'select option:checked, .gadget_header .basic_tag .txt, .card_header .basic_tag .txt, .basic_tag .txt, .state, .status, .badge, .chip, .txt_state, .btn_state'
                     ));
                     for (const el of statusEls) {
                         if (el.tagName !== 'OPTION' && el.offsetParent === null) continue;
@@ -1774,9 +1951,15 @@ public sealed class DaouAttendanceService
 
                 const combinedStatus = ((apiStatus || '') + ' ' + (badgeText || '')).toUpperCase();
                 const isBreakStatus = combinedStatus.includes('휴게') || combinedStatus.includes('BREAK') || combinedStatus.includes('외출');
+                const isWorkStatus = combinedStatus.includes('WORKING') || combinedStatus.includes('WORK_IN') || combinedStatus.includes('ON_WORK') ||
+                    combinedStatus.includes('근무중') || combinedStatus.includes('근무 중') ||
+                    combinedStatus.includes('업무중') || combinedStatus.includes('업무 중') ||
+                    combinedStatus.includes('업무');
 
                 if (isBreakStatus) {
                     state = 'BREAK';
+                } else if (isWorkStatus) {
+                    state = 'WORKING';
                 } else if (clockInBtnFound && clockInBtnDisabled && clockOutBtnFound && !clockOutBtnDisabled && !hasValidClockOut) {
                     state = 'WORKING';
                 } else if (hasValidClockIn && !hasValidClockOut) {
@@ -1786,13 +1969,8 @@ public sealed class DaouAttendanceService
                 } else if (clockInBtnFound && !clockInBtnDisabled) {
                     state = 'OFF_WORK';
                 } else {
-                    if (combinedStatus.includes('WORKING') || combinedStatus.includes('WORK_IN') || combinedStatus.includes('ON_WORK') ||
-                        combinedStatus.includes('근무중') || combinedStatus.includes('근무 중') ||
-                        combinedStatus.includes('업무중') || combinedStatus.includes('업무 중') ||
-                        combinedStatus.includes('업무')) {
-                        state = 'WORKING';
-                    } else if (combinedStatus.includes('WORK_OUT') || combinedStatus.includes('OFF_WORK') ||
-                               combinedStatus.includes('업무종료') || combinedStatus.includes('출근전')) {
+                    if (combinedStatus.includes('WORK_OUT') || combinedStatus.includes('OFF_WORK') ||
+                        combinedStatus.includes('업무종료') || combinedStatus.includes('출근전')) {
                         state = 'OFF_WORK';
                     } else {
                         state = 'LOADING';
@@ -1809,6 +1987,43 @@ public sealed class DaouAttendanceService
                     disabled: el.disabled
                 })).filter(b => b.text && b.text.length < 30);
 
+                const todayGadgetDataObj = (window.__workdotApiLogs || []).find(l => (l.url || '').includes('gadget/today'))?.data;
+                const canClockIn = Boolean(
+                    (todayGadgetDataObj?.data?.clockInWorkStatusId) ||
+                    (clockInBtnFound && !clockInBtnDisabled)
+                );
+
+                let canResumeWork = false;
+                const ableList = todayGadgetDataObj?.data?.ableWorkStatusList || [];
+                if (Array.isArray(ableList) && ableList.some(item => (item.workStatusName || '').includes('업무'))) {
+                    canResumeWork = true;
+                }
+
+                if (!canResumeWork) {
+                    for (const doc of docs) {
+                        const items = Array.from(doc.querySelectorAll('.wrap_lnb_btn .menu_item, .select_list .menu_item, .list_menu button, .attend_btn button'));
+                        for (const it of items) {
+                            const t = clean(it.innerText);
+                            if ((t === '업무' || t.startsWith('업무') || t === '정상근무' || t.includes('복귀')) && !it.disabled) {
+                                canResumeWork = true;
+                                break;
+                            }
+                        }
+                        if (canResumeWork) break;
+                    }
+                }
+
+                if (!canResumeWork && clockInBtnFound && clockInBtnDisabled) {
+                    const hasChangeBtn = Boolean(document.querySelector('.wrap_lnb_btn button, .attend_btn .wrap_lnb_btn button'));
+                    if (hasChangeBtn) {
+                        canResumeWork = true;
+                    }
+                }
+
+                if (canClockIn) {
+                    canResumeWork = false;
+                }
+
                 return JSON.stringify({
                     isLoginPage: false,
                     url,
@@ -1820,6 +2035,8 @@ public sealed class DaouAttendanceService
                     breakRanges: Array.from(breakRangesSet),
                     badgeText,
                     apiStatus,
+                    canClockIn,
+                    canResumeWork,
                     clockInBtnFound,
                     clockInBtnDisabled,
                     clockOutBtnFound,
@@ -1827,7 +2044,7 @@ public sealed class DaouAttendanceService
                     gadgetHtml,
                     candidateButtons,
                     apiLogs: (window.__workdotApiLogs || []).map(l => l.url),
-                    todayGadgetData: (window.__workdotApiLogs || []).find(l => (l.url || '').includes('gadget/today'))?.data,
+                    todayGadgetData: todayGadgetDataObj,
                     searchApi: (() => {
                         try {
                             const entries = (window.__workdotApiLogs || []).map(l => l.url);
@@ -1843,10 +2060,14 @@ public sealed class DaouAttendanceService
         })();
         """;
 
+    /// <summary>
+    /// 첫 출근(오늘 출근 기록이 없는 날 / 다음날 첫 출근) 시 다우오피스의 활성화된 '출근하기' 버튼만 탐색하여 클릭합니다.
+    /// </summary>
     private static string GetClockInTriggerScript() => """
         (() => {
             const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-            // 1. 다우오피스 EHR 좌측 근태 가젯(.lnb_gadget.gadget_attend .attend_btn button) 최우선 탐색
+
+            // 1. 다우오피스 EHR 좌측 근태 가젯의 출근하기 버튼 최우선 탐색
             const gadgetBtns = Array.from(document.querySelectorAll('.lnb_gadget.gadget_attend .attend_btn button, .attend_card .attend_btn button, .attend_btn button'));
             for (const btn of gadgetBtns) {
                 const t = clean(btn.innerText);
@@ -1862,11 +2083,14 @@ public sealed class DaouAttendanceService
             // 2. 레거시 직접 셀렉터
             const direct = document.querySelector('#workIn, #clockIn, [data-role="clockIn"], [data-action="clockIn"], .btn_work_in');
             if (direct) {
+                if (direct.disabled || direct.classList.contains('disabled')) {
+                    return 'DISABLED:DIRECT';
+                }
                 direct.click();
                 return 'OK:DIRECT';
             }
 
-            // 3. 일반 버튼 요소 탐색 (단순 텍스트 span 제외)
+            // 3. 일반 버튼 요소 탐색
             const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]'));
             for (const el of candidates) {
                 if (el.offsetParent === null) continue;
@@ -1879,7 +2103,58 @@ public sealed class DaouAttendanceService
                     return 'OK:' + t;
                 }
             }
+
             return 'NOT_FOUND';
+        })();
+        """;
+
+    /// <summary>
+    /// 오늘 이미 출근 후 퇴근한 상태에서 다시 업무를 시작할 때,
+    /// 다우오피스의 '근무상태변경' -> '업무' 메뉴를 탐색하여 클릭합니다.
+    /// </summary>
+    private static string GetResumeWorkTriggerScript() => """
+        (() => {
+            const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+            // 1. 이미 업무/근무중 상태인지 확인
+            const gadget = document.querySelector('.lnb_gadget.gadget_attend, .attend_card');
+            const curTag = gadget ? gadget.querySelector('.gadget_header .basic_tag .txt, .card_header .basic_tag .txt') : null;
+            if (curTag && (clean(curTag.innerText) === '업무' || clean(curTag.innerText) === '근무중')) {
+                return 'ALREADY_WORKING';
+            }
+
+            // 2. 직접 복귀 버튼이 있는 경우
+            const directBtns = Array.from(document.querySelectorAll('.attend_btn button, .lnb_gadget button, button'));
+            for (const btn of directBtns) {
+                const t = clean(btn.innerText);
+                if (t === '업무복귀' || t === '업무 시작' || t === '근무재개' || t === '업무재개' || t === '복귀') {
+                    if (!btn.disabled) {
+                        btn.click();
+                        return 'OK:DIRECT_RETURN:' + t;
+                    }
+                }
+            }
+
+            // 3. '근무상태변경' 드롭다운 버튼 클릭
+            const changeBtn = document.querySelector('.wrap_lnb_btn button, .attend_btn .wrap_lnb_btn button');
+            if (changeBtn) {
+                changeBtn.click();
+            }
+
+            // 4. '업무' 메뉴 아이템 찾기 및 클릭
+            const items = Array.from(document.querySelectorAll('.wrap_lnb_btn .menu_item, .select_list .menu_item, .list_menu button, .attend_btn button'));
+            const workItem = items.find(el => {
+                const t = clean(el.innerText);
+                return t === '업무' || t.startsWith('업무') || t === '정상근무' || t.includes('복귀');
+            });
+
+            if (workItem) {
+                if (workItem.disabled) return 'DISABLED:업무';
+                workItem.click();
+                return 'OK:WORK_CLICKED';
+            }
+
+            return 'NOT_FOUND:WORK_BTN';
         })();
         """;
 
