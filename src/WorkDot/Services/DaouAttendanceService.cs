@@ -31,12 +31,26 @@ public sealed record AttendanceSnapshot(
     IReadOnlyList<BreakTimeWindow>? BreakWindows = null,
     DateTime? ActiveBreakStart = null,
     bool CanClockIn = false,
-    bool CanResumeWork = false)
+    bool CanResumeWork = false,
+    IReadOnlyList<BreakTimeWindow>? UserBreakWindows = null)
 {
     private static readonly IReadOnlyList<BreakTimeWindow> DefaultBreakWindows =
     [
         new BreakTimeWindow(new TimeSpan(12, 0, 0), new TimeSpan(13, 0, 0))
     ];
+
+    /// <summary>
+    /// 시각 문자열("10:17:20" 또는 "10:14")을 위젯 표시용 "HH:mm" 형식으로 변환합니다.
+    /// </summary>
+    public static string FormatClockTimeHm(string? rawTime)
+    {
+        if (!string.IsNullOrWhiteSpace(rawTime) &&
+            TimeSpan.TryParse(rawTime.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan ts))
+        {
+            return $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}";
+        }
+        return "--:--";
+    }
 
     /// <summary>
     /// 오늘 날짜(DateTime.Today) 기준으로 유효한 출근 기록이 존재하는지 여부.
@@ -65,9 +79,35 @@ public sealed record AttendanceSnapshot(
     /// </summary>
     public TimeSpan? GetWorkingElapsedSpanExcludingBreaks(DateTime now)
     {
-        DateTime effectiveNow = (ActiveBreakStart.HasValue && now > ActiveBreakStart.Value)
-            ? ActiveBreakStart.Value
-            : now;
+        if (Status == WorkStatusKind.OffWork && !HasClockedInToday)
+        {
+            return null;
+        }
+
+        DateTime effectiveNow;
+        if (Status == WorkStatusKind.OffWork)
+        {
+            if (!string.IsNullOrWhiteSpace(ClockOutTimeText) &&
+                TimeSpan.TryParse(ClockOutTimeText.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan clockOutTod))
+            {
+                effectiveNow = now.Date.Add(clockOutTod);
+            }
+            else if (!string.IsNullOrWhiteSpace(WorkedDurationText) &&
+                     TimeSpan.TryParse(WorkedDurationText.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan offDur))
+            {
+                return offDur;
+            }
+            else
+            {
+                return null;
+            }
+        }
+        else
+        {
+            effectiveNow = (ActiveBreakStart.HasValue && now > ActiveBreakStart.Value)
+                ? ActiveBreakStart.Value
+                : now;
+        }
 
         if (!string.IsNullOrWhiteSpace(ClockInTimeText) &&
             TimeSpan.TryParse(ClockInTimeText.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan clockInTod))
@@ -140,6 +180,53 @@ public sealed record AttendanceSnapshot(
 
         return null;
     }
+
+    /// <summary>
+    /// 오늘 누적된 사용자 휴게(근무상태변경 휴게·외출 등, 기본 점심시간 제외) 경과 시간(TimeSpan)을 계산합니다.
+    /// </summary>
+    public TimeSpan GetUserBreakElapsedSpan(DateTime now)
+    {
+        TimeSpan total = TimeSpan.Zero;
+        if (UserBreakWindows != null && UserBreakWindows.Count > 0)
+        {
+            foreach (var bw in UserBreakWindows)
+            {
+                TimeSpan dur = bw.End >= bw.Start
+                    ? (bw.End - bw.Start)
+                    : (bw.End + TimeSpan.FromDays(1) - bw.Start);
+                if (dur > TimeSpan.Zero)
+                {
+                    total += dur;
+                }
+            }
+        }
+
+        if (Status == WorkStatusKind.Break && ActiveBreakStart.HasValue && now > ActiveBreakStart.Value)
+        {
+            total += (now - ActiveBreakStart.Value);
+        }
+
+        return total;
+    }
+
+    /// <summary>
+    /// 오늘 누적된 사용자 휴게 시간을 "HH:mm" 형식으로 반환합니다.
+    /// </summary>
+    public string GetUserBreakElapsedText(DateTime now)
+    {
+        TimeSpan span = GetUserBreakElapsedSpan(now);
+        int hours = (int)span.TotalHours;
+        int minutes = span.Minutes;
+        return $"{hours:D2}:{minutes:D2}";
+    }
+
+    /// <summary>
+    /// 오늘 사용자 휴게 기록이 존재하거나 현재 휴게 중인지 여부.
+    /// </summary>
+    public bool HasUserBreak(DateTime now) =>
+        Status == WorkStatusKind.Break ||
+        GetUserBreakElapsedSpan(now).TotalMinutes >= 1.0 ||
+        (UserBreakWindows != null && UserBreakWindows.Count > 0);
 }
 
 internal sealed record SavedCookieItem(
@@ -1127,7 +1214,9 @@ public sealed class DaouAttendanceService
         _manualStatusOverride = status;
         _manualOverrideDate = DateTime.Today;
 
-        var mergedBreaks = MergeBreakWindows(CurrentSnapshot.BreakWindows, _userBreakWindowsToday);
+        var mergedUserBreaks = NormalizeAndMergeBreakWindows(
+            (CurrentSnapshot.UserBreakWindows ?? []).Concat(_userBreakWindowsToday));
+        var mergedBreaks = MergeBreakWindows(CurrentSnapshot.BreakWindows, mergedUserBreaks);
         string nowTime = DateTime.Now.ToString("HH:mm");
 
         if (status == WorkStatusKind.Break)
@@ -1145,12 +1234,15 @@ public sealed class DaouAttendanceService
                 CurrentSnapshot.WorkedDurationText,
                 DateTime.Now,
                 mergedBreaks,
-                _activeBreakStartTime));
+                _activeBreakStartTime,
+                false,
+                false,
+                mergedUserBreaks));
         }
         else if (status == WorkStatusKind.Working)
         {
-            // 업무 복귀면 이전 출근 시각 유지, 첫 출근이면 현재 시각
-            string workClockIn = CurrentSnapshot.IsResumeWorkAvailable
+            // 휴게 복귀 또는 당일 업무 복귀면 이전 출근 시각 유지, 첫 출근이면 현재 시각
+            string workClockIn = (CurrentSnapshot.HasClockedInToday || CurrentSnapshot.IsResumeWorkAvailable)
                 ? (CurrentSnapshot.ClockInTimeText ?? nowTime)
                 : nowTime;
             UpdateSnapshot(new AttendanceSnapshot(
@@ -1162,7 +1254,10 @@ public sealed class DaouAttendanceService
                 CurrentSnapshot.WorkedDurationText,
                 DateTime.Now,
                 mergedBreaks,
-                null));
+                null,
+                false,
+                false,
+                mergedUserBreaks));
         }
         else
         {
@@ -1175,32 +1270,63 @@ public sealed class DaouAttendanceService
                 CurrentSnapshot.WorkedDurationText,
                 DateTime.Now,
                 mergedBreaks,
-                null));
+                null,
+                false,
+                true,
+                mergedUserBreaks));
         }
+    }
+
+    private static IReadOnlyList<BreakTimeWindow> NormalizeAndMergeBreakWindows(IEnumerable<BreakTimeWindow>? windows)
+    {
+        if (windows == null)
+            return [];
+
+        var valid = windows
+            .Where(w => w.End > w.Start)
+            .OrderBy(w => w.Start)
+            .ToList();
+
+        if (valid.Count <= 1)
+            return valid;
+
+        var merged = new List<BreakTimeWindow> { valid[0] };
+        for (int i = 1; i < valid.Count; i++)
+        {
+            var prev = merged[^1];
+            var cur = valid[i];
+
+            // 1분 이내로 겹치거나 맞닿은 휴게 구간은 하나로 병합하여 중복 차감/합산 방지
+            if (cur.Start <= prev.End.Add(TimeSpan.FromMinutes(1)))
+            {
+                TimeSpan maxEnd = cur.End > prev.End ? cur.End : prev.End;
+                merged[^1] = new BreakTimeWindow(prev.Start, maxEnd);
+            }
+            else
+            {
+                merged.Add(cur);
+            }
+        }
+
+        return merged;
     }
 
     private static IReadOnlyList<BreakTimeWindow> MergeBreakWindows(
         IReadOnlyList<BreakTimeWindow>? baseBreaks,
         IReadOnlyList<BreakTimeWindow> userBreaks)
     {
-        var result = new List<BreakTimeWindow>();
+        var combined = new List<BreakTimeWindow>();
         if (baseBreaks != null && baseBreaks.Count > 0)
         {
-            result.AddRange(baseBreaks);
+            combined.AddRange(baseBreaks);
         }
         else
         {
-            result.Add(new BreakTimeWindow(new TimeSpan(12, 0, 0), new TimeSpan(13, 0, 0)));
+            combined.Add(new BreakTimeWindow(new TimeSpan(12, 0, 0), new TimeSpan(13, 0, 0)));
         }
 
-        foreach (var ub in userBreaks)
-        {
-            if (!result.Contains(ub))
-            {
-                result.Add(ub);
-            }
-        }
-        return result;
+        combined.AddRange(userBreaks);
+        return NormalizeAndMergeBreakWindows(combined);
     }
 
     public async Task ProbeDomAndApiStatusAsync(CoreWebView2 webView)
@@ -1317,10 +1443,75 @@ public sealed class DaouAttendanceService
                 breakWindows = CurrentSnapshot.BreakWindows.ToList();
             }
 
+            var domUserBreaks = new List<BreakTimeWindow>();
+            if (root.TryGetProperty("userBreakRanges", out var ubrProp) && ubrProp.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in ubrProp.EnumerateArray())
+                {
+                    string? rangeStr = item.GetString();
+                    if (!string.IsNullOrWhiteSpace(rangeStr))
+                    {
+                        var parts = rangeStr.Split('~', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                        if (parts.Length == 2 &&
+                            TimeSpan.TryParse(parts[0], System.Globalization.CultureInfo.InvariantCulture, out TimeSpan ubs) &&
+                            TimeSpan.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out TimeSpan ube))
+                        {
+                            domUserBreaks.Add(new BreakTimeWindow(ubs, ube));
+                        }
+                    }
+                }
+            }
+
+            if (root.TryGetProperty("activeBreakStart", out var absProp) &&
+                absProp.ValueKind == JsonValueKind.String &&
+                TimeSpan.TryParse(absProp.GetString(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan absTod))
+            {
+                DateTime domBreakStart = DateTime.Today.Add(absTod);
+                if (state == "BREAK" && domBreakStart <= DateTime.Now.AddMinutes(1))
+                {
+                    _activeBreakStartTime = domBreakStart;
+                }
+            }
+
+            if (state == "WORKING" || state == "OFF_WORK")
+            {
+                if (_activeBreakStartTime.HasValue)
+                {
+                    DateTime endRef = DateTime.Now;
+                    if (state == "OFF_WORK" &&
+                        !string.IsNullOrWhiteSpace(clockOut) &&
+                        TimeSpan.TryParse(clockOut.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan outTod))
+                    {
+                        endRef = DateTime.Today.Add(outTod);
+                    }
+
+                    if (endRef > _activeBreakStartTime.Value)
+                    {
+                        _userBreakWindowsToday.Add(new BreakTimeWindow(_activeBreakStartTime.Value.TimeOfDay, endRef.TimeOfDay));
+                    }
+                    _activeBreakStartTime = null;
+                }
+            }
+
+            var combinedUserBreaks = new List<BreakTimeWindow>();
+            combinedUserBreaks.AddRange(domUserBreaks);
             if (_userBreaksDate == DateTime.Today && _userBreakWindowsToday.Count > 0)
             {
-                breakWindows = MergeBreakWindows(breakWindows, _userBreakWindowsToday).ToList();
+                combinedUserBreaks.AddRange(_userBreakWindowsToday);
             }
+            else if (domUserBreaks.Count == 0 && CurrentSnapshot.UserBreakWindows != null && CurrentSnapshot.UpdatedAt.Date == DateTime.Today)
+            {
+                combinedUserBreaks.AddRange(CurrentSnapshot.UserBreakWindows);
+            }
+
+            var mergedUserBreaks = NormalizeAndMergeBreakWindows(combinedUserBreaks);
+            if (_userBreaksDate == DateTime.Today)
+            {
+                _userBreakWindowsToday.Clear();
+                _userBreakWindowsToday.AddRange(mergedUserBreaks);
+            }
+
+            breakWindows = MergeBreakWindows(breakWindows, mergedUserBreaks).ToList();
 
             if (_manualStatusOverride.HasValue && _manualOverrideDate == DateTime.Today)
             {
@@ -1343,7 +1534,10 @@ public sealed class DaouAttendanceService
                         duration,
                         DateTime.Now,
                         breakWindows,
-                        breakStart));
+                        breakStart,
+                        canClockIn,
+                        canResumeWork,
+                        mergedUserBreaks));
                     return;
                 }
                 else
@@ -1370,22 +1564,15 @@ public sealed class DaouAttendanceService
                     duration,
                     DateTime.Now,
                     breakWindows,
-                    breakStart));
+                    breakStart,
+                    canClockIn,
+                    canResumeWork,
+                    mergedUserBreaks));
                 return;
             }
 
             if (state == "WORKING")
             {
-                if (_activeBreakStartTime.HasValue)
-                {
-                    DateTime now = DateTime.Now;
-                    if (now > _activeBreakStartTime.Value)
-                    {
-                        _userBreakWindowsToday.Add(new BreakTimeWindow(_activeBreakStartTime.Value.TimeOfDay, now.TimeOfDay));
-                    }
-                    _activeBreakStartTime = null;
-                }
-
                 string sub = !string.IsNullOrWhiteSpace(clockIn)
                     ? $"출근 {clockIn}" + (!string.IsNullOrWhiteSpace(duration) ? $" · {duration}" : "")
                     : (!string.IsNullOrWhiteSpace(badgeText) ? badgeText : "정상 근무중");
@@ -1398,7 +1585,11 @@ public sealed class DaouAttendanceService
                     clockOut,
                     duration,
                     DateTime.Now,
-                    breakWindows));
+                    breakWindows,
+                    null,
+                    canClockIn,
+                    canResumeWork,
+                    mergedUserBreaks));
             }
             else if (state == "OFF_WORK")
             {
@@ -1419,7 +1610,8 @@ public sealed class DaouAttendanceService
                     breakWindows,
                     null,
                     canClockIn,
-                    canResumeWork));
+                    canResumeWork,
+                    mergedUserBreaks));
             }
         }
         catch
@@ -2095,6 +2287,109 @@ public sealed class DaouAttendanceService
                     canResumeWork = false;
                 }
 
+                // 오늘의 근무상태 내역(예: "10:17출근", "18:54휴게", "19:28업무", "21:13퇴근")에서 사용자 휴게 구간 및 진행 중 휴게 시작 시각 추출
+                const historyEvents = [];
+                const addHistoryEvent = (hm, label) => {
+                    if (!hm || !label) return;
+                    let kind = 'WORK';
+                    if (label.includes('휴게') || label.includes('외출')) {
+                        kind = 'BREAK';
+                    } else if (label.includes('퇴근') || label.includes('업무종료') || label.includes('종료')) {
+                        kind = 'OUT';
+                    }
+                    if (!historyEvents.some(e => e.time === hm && e.kind === kind)) {
+                        historyEvents.push({ time: hm, kind, label });
+                    }
+                };
+
+                const histRe = /^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?\s*(출근|업무시작|업무|정상근무|근무|복귀|연장근무|외근|출장|휴게|외출|퇴근|업무종료)$/;
+                for (const doc of docs) {
+                    const histNodes = Array.from(doc.querySelectorAll('li, .work_stop, div.txt'));
+                    for (const el of histNodes) {
+                        if (isInsidePastTableRow(el)) continue;
+                        const t = clean(el.innerText);
+                        const m = t.match(histRe);
+                        if (m) {
+                            addHistoryEvent(`${m[1]}:${m[2]}`, m[3]);
+                        }
+                    }
+                }
+
+                // timeline API 로그에서도 당일 상태 변경 내역 보완 추출
+                if (Array.isArray(window.__workdotApiLogs)) {
+                    for (let i = window.__workdotApiLogs.length - 1; i >= 0; i--) {
+                        const entry = window.__workdotApiLogs[i];
+                        if (!entry || !entry.url || !entry.url.includes(`timeline/${todayIso}`)) continue;
+                        const visitTimeline = (obj) => {
+                            if (!obj || typeof obj !== 'object') return;
+                            if (Array.isArray(obj)) {
+                                obj.forEach(visitTimeline);
+                                return;
+                            }
+                            const rawTime = obj.checkTime ?? obj.logTime ?? obj.changeTime ?? obj.startTime ?? obj.attndTime;
+                            const rawLabel = obj.workStatusName ?? obj.statusName ?? obj.displayWorkType ?? obj.stateName;
+                            if (typeof rawTime === 'string' && typeof rawLabel === 'string') {
+                                const tm = rawTime.match(/([01]\d|2[0-3]):([0-5]\d)/);
+                                if (tm && /^(출근|업무시작|업무|정상근무|근무|복귀|연장근무|외근|출장|휴게|외출|퇴근|업무종료)/.test(rawLabel.trim())) {
+                                    addHistoryEvent(`${tm[1]}:${tm[2]}`, rawLabel.trim());
+                                }
+                            }
+                            for (const k of Object.keys(obj)) {
+                                if (typeof obj[k] === 'object') visitTimeline(obj[k]);
+                            }
+                        };
+                        try { visitTimeline(entry.data); } catch {}
+                        break;
+                    }
+                }
+
+                historyEvents.sort((a, b) => a.time.localeCompare(b.time));
+
+                const userBreakRangesSet = new Set();
+                let activeBreakStart = null;
+                let openBreakStart = null;
+                let lastOutTime = null;
+
+                for (const ev of historyEvents) {
+                    if (ev.kind === 'BREAK') {
+                        if (!openBreakStart) {
+                            openBreakStart = ev.time;
+                        }
+                    } else if (ev.kind === 'WORK') {
+                        if (openBreakStart) {
+                            if (ev.time > openBreakStart) {
+                                userBreakRangesSet.add(`${openBreakStart}~${ev.time}`);
+                            }
+                            openBreakStart = null;
+                        } else if (lastOutTime) {
+                            if (ev.time > lastOutTime) {
+                                userBreakRangesSet.add(`${lastOutTime}~${ev.time}`);
+                            }
+                            lastOutTime = null;
+                        }
+                    } else if (ev.kind === 'OUT') {
+                        if (openBreakStart) {
+                            if (ev.time > openBreakStart) {
+                                userBreakRangesSet.add(`${openBreakStart}~${ev.time}`);
+                            }
+                            openBreakStart = null;
+                        }
+                        lastOutTime = ev.time;
+                    }
+                }
+
+                if (openBreakStart) {
+                    if (state === 'OFF_WORK' && clockOut) {
+                        const outHm = clockOut.slice(0, 5);
+                        if (outHm > openBreakStart) {
+                            userBreakRangesSet.add(`${openBreakStart}~${outHm}`);
+                        }
+                        openBreakStart = null;
+                    } else if (state === 'BREAK') {
+                        activeBreakStart = openBreakStart;
+                    }
+                }
+
                 return JSON.stringify({
                     isLoginPage: false,
                     url,
@@ -2104,6 +2399,8 @@ public sealed class DaouAttendanceService
                     clockOutExplicitlyUnset,
                     duration,
                     breakRanges: Array.from(breakRangesSet),
+                    userBreakRanges: Array.from(userBreakRangesSet),
+                    activeBreakStart,
                     badgeText,
                     apiStatus,
                     canClockIn,

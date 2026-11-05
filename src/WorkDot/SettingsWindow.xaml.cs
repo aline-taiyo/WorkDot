@@ -177,6 +177,18 @@ public partial class SettingsWindow : Window
                 // Fallback
             }
 
+            ExpandedModeCheck.IsChecked = s.WidgetExpandedMode;
+            ShowClockInCheck.IsChecked = s.ShowClockInColumn;
+            ShowWorkCheck.IsChecked = s.ShowWorkColumn;
+            ShowBreakCheck.IsChecked = s.ShowBreakColumn;
+            ShowClockOutCheck.IsChecked = s.ShowClockOutColumn;
+
+            CategoryFontSizeSlider.Value = s.CategoryFontSize;
+            CategoryFontSizeValueText.Text = $"{s.CategoryFontSize:0.#}pt";
+
+            TimeFontSizeSlider.Value = s.TimeFontSize;
+            TimeFontSizeValueText.Text = $"{s.TimeFontSize:0.#}pt";
+
             AlwaysOnTopCheck.IsChecked = s.AlwaysOnTop;
             RunAtStartupCheck.IsChecked = s.RunAtStartup;
             AutoUpdateCheck.IsChecked = s.AutoUpdateEnabled;
@@ -328,17 +340,47 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void OnCategoryFontSizeSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_isLoadingUi || _settingsService == null || CategoryFontSizeValueText == null)
+            return;
+
+        double val = Math.Round(e.NewValue * 2.0, MidpointRounding.AwayFromZero) / 2.0;
+        CategoryFontSizeValueText.Text = $"{val:0.#}pt";
+        _settingsService.SaveAndApply(s => s.CategoryFontSize = val);
+    }
+
+    private void OnTimeFontSizeSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_isLoadingUi || _settingsService == null || TimeFontSizeValueText == null)
+            return;
+
+        double val = Math.Round(e.NewValue * 2.0, MidpointRounding.AwayFromZero) / 2.0;
+        TimeFontSizeValueText.Text = $"{val:0.#}pt";
+        _settingsService.SaveAndApply(s => s.TimeFontSize = val);
+    }
+
     private void OnBehaviorCheckChanged(object sender, RoutedEventArgs e)
     {
         if (_isLoadingUi || _settingsService == null)
             return;
 
+        bool expandedMode = ExpandedModeCheck.IsChecked == true;
+        bool showClockIn = ShowClockInCheck.IsChecked == true;
+        bool showWork = ShowWorkCheck.IsChecked == true;
+        bool showBreak = ShowBreakCheck.IsChecked == true;
+        bool showClockOut = ShowClockOutCheck.IsChecked == true;
         bool topMost = AlwaysOnTopCheck.IsChecked == true;
         bool startup = RunAtStartupCheck.IsChecked == true;
         bool autoUpdate = AutoUpdateCheck.IsChecked == true;
 
         _settingsService.SaveAndApply(s =>
         {
+            s.WidgetExpandedMode = expandedMode;
+            s.ShowClockInColumn = showClockIn;
+            s.ShowWorkColumn = showWork;
+            s.ShowBreakColumn = showBreak;
+            s.ShowClockOutColumn = showClockOut;
             s.AlwaysOnTop = topMost;
             s.RunAtStartup = startup;
             s.AutoUpdateEnabled = autoUpdate;

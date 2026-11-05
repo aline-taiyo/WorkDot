@@ -21,15 +21,22 @@ public sealed class AppSettings
     public WidgetThemeMode ThemeMode { get; set; } = WidgetThemeMode.System;
     public string WorkingColorHex { get; set; } = "#10B981"; // 기본 네온 에메랄드 그린
     public string OffWorkColorHex { get; set; } = "#EF4444"; // 기본 루비 레드
-    public double WidgetOpacity { get; set; } = 0.95;        // 0.25 ~ 1.0
-    public double WidgetScale { get; set; } = 1.0;           // 0.70 ~ 3.00
+    public double WidgetOpacity { get; set; } = 1.0;         // 0.25 ~ 1.0 (기본 100%)
+    public double WidgetScale { get; set; } = 2.0;           // 0.70 ~ 3.00 (기본 200%)
     public string TimeFontFamily { get; set; } = "Cascadia Mono, Consolas"; // 위젯 시간 표시 폰트
     public string PortalHotKey { get; set; } = "Ctrl+Shift+F5"; // 근태홈 열기 기본 단축키
     public double? WidgetLeft { get; set; }                  // 이전 위젯 X 위치 (DIP)
     public double? WidgetTop { get; set; }                   // 이전 위젯 Y 위치 (DIP)
+    public bool WidgetExpandedMode { get; set; } = true;     // 위젯 확장 모드 (기본 활성화)
+    public double CategoryFontSize { get; set; } = 7.0;      // 확장 모드 카테고리 라벨 글자 크기 (7.0 ~ 18.0, 기본 7pt)
+    public double TimeFontSize { get; set; } = 11.5;         // 확장 모드/시간 숫자 글자 크기 (8.0 ~ 22.0, 기본 11.5pt)
+    public bool ShowClockInColumn { get; set; } = true;      // 확장 모드: 출근 표시 여부
+    public bool ShowWorkColumn { get; set; } = true;         // 확장 모드: 근무 표시 여부
+    public bool ShowBreakColumn { get; set; } = true;        // 확장 모드: 휴게 표시 여부
+    public bool ShowClockOutColumn { get; set; } = true;     // 확장 모드: 퇴근 표시 여부
     public bool AlwaysOnTop { get; set; } = true;
     public bool ShowInTaskbar { get; set; } = false;         // 작업표시줄 아이콘 표시 여부
-    public bool RunAtStartup { get; set; } = false;
+    public bool RunAtStartup { get; set; } = true;           // Windows 시작 시 자동 실행 (기본 활성화)
     public bool AutoUpdateEnabled { get; set; } = true;      // GitHub Release 자동 업데이트 활성화 여부
 }
 
@@ -68,9 +75,10 @@ public sealed class AppSettingsService : IDisposable
 
     public void Load()
     {
+        bool settingsFileExisted = File.Exists(_settingsFilePath);
         try
         {
-            if (File.Exists(_settingsFilePath))
+            if (settingsFileExisted)
             {
                 string json = File.ReadAllText(_settingsFilePath);
                 var loaded = JsonSerializer.Deserialize<AppSettings>(json);
@@ -83,9 +91,18 @@ public sealed class AppSettingsService : IDisposable
         catch
         {
             Current = new AppSettings();
+            settingsFileExisted = false;
         }
 
-        Current.RunAtStartup = IsStartupRegistered();
+        if (settingsFileExisted)
+        {
+            Current.RunAtStartup = IsStartupRegistered();
+        }
+        else
+        {
+            ApplyStartupRegistry(Current.RunAtStartup);
+            Current.RunAtStartup = IsStartupRegistered();
+        }
     }
 
     public void SaveAndApply(Action<AppSettings>? mutate = null)
@@ -193,6 +210,8 @@ public sealed class AppSettingsService : IDisposable
     {
         s.WidgetOpacity = Math.Clamp(Math.Round(s.WidgetOpacity, 2), 0.25, 1.0);
         s.WidgetScale = Math.Clamp(Math.Round(s.WidgetScale, 2), 0.70, 3.00);
+        s.CategoryFontSize = Math.Clamp(Math.Round(s.CategoryFontSize, 1), 7.0, 18.0);
+        s.TimeFontSize = Math.Clamp(Math.Round(s.TimeFontSize, 1), 8.0, 22.0);
 
         if (string.IsNullOrWhiteSpace(s.TimeFontFamily))
             s.TimeFontFamily = "Cascadia Mono, Consolas";

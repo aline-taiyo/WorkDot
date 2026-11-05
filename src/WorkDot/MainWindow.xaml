@@ -46,6 +46,7 @@
                 <MenuItem Header="근태홈 열기" Click="OnOpenPortalClick"/>
                 <MenuItem Header="새로고침" Click="OnRefreshClick"/>
                 <Separator/>
+                <MenuItem x:Name="MenuExpandedMode" Header="위젯 확장 모드" IsCheckable="True" Click="OnMenuExpandedModeClick"/>
                 <MenuItem x:Name="MenuAlwaysOnTop" Header="항상 위에 표시" IsCheckable="True" Click="OnMenuAlwaysOnTopClick"/>
                 <MenuItem x:Name="MenuRunAtStartup" Header="Windows 시작 시 자동 실행" IsCheckable="True" Click="OnMenuRunAtStartupClick"/>
                 <MenuItem Header="위젯 크기">
@@ -161,6 +162,116 @@
                                    VerticalAlignment="Center"/>
                     </StackPanel>
                 </Border>
+
+                <!-- 1.5. Expanded Mode Category Time Table (출근 | 근무 | 휴게 | 퇴근) -->
+                <StackPanel x:Name="ExpandedSummaryPanel"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            Margin="7,0,2,0"
+                            Visibility="Collapsed">
+
+                    <!-- 출근 -->
+                    <StackPanel x:Name="ColClockIn" VerticalAlignment="Center" MinWidth="34">
+                        <TextBlock x:Name="HeaderClockInText"
+                                   Text="출근"
+                                   FontFamily="{StaticResource SansFont}"
+                                   FontSize="9.5"
+                                   FontWeight="SemiBold"
+                                   Foreground="#A1A1AA"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,0,0,1"/>
+                        <TextBlock x:Name="ValClockInText"
+                                   Text="--:--"
+                                   FontFamily="{StaticResource MonoFont}"
+                                   FontSize="11.5"
+                                   FontWeight="SemiBold"
+                                   Foreground="#FAFAFA"
+                                   HorizontalAlignment="Center"/>
+                    </StackPanel>
+
+                    <Border x:Name="DivWork"
+                            Width="1"
+                            Background="#27272A"
+                            Margin="7,2"
+                            VerticalAlignment="Stretch"/>
+
+                    <!-- 근무 -->
+                    <StackPanel x:Name="ColWork" VerticalAlignment="Center" MinWidth="34">
+                        <TextBlock x:Name="HeaderWorkText"
+                                   Text="근무"
+                                   FontFamily="{StaticResource SansFont}"
+                                   FontSize="9.5"
+                                   FontWeight="SemiBold"
+                                   Foreground="#A1A1AA"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,0,0,1"/>
+                        <TextBlock x:Name="ValWorkText"
+                                   Text="--:--"
+                                   FontFamily="{StaticResource MonoFont}"
+                                   FontSize="11.5"
+                                   FontWeight="SemiBold"
+                                   Foreground="#10B981"
+                                   HorizontalAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- 휴게 (출근중일 때는 휴게가 있을 때만 표시, 퇴근 상태일 때는 항상 표시) -->
+                    <StackPanel x:Name="ColBreakPanel"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center"
+                                Visibility="Collapsed">
+                        <Border x:Name="DivBreak"
+                                Width="1"
+                                Background="#27272A"
+                                Margin="7,2"
+                                VerticalAlignment="Stretch"/>
+                        <StackPanel x:Name="ColBreak" VerticalAlignment="Center" MinWidth="34">
+                            <TextBlock x:Name="HeaderBreakText"
+                                       Text="휴게"
+                                       FontFamily="{StaticResource SansFont}"
+                                       FontSize="9.5"
+                                       FontWeight="SemiBold"
+                                       Foreground="#A1A1AA"
+                                       HorizontalAlignment="Center"
+                                       Margin="0,0,0,1"/>
+                            <TextBlock x:Name="ValBreakText"
+                                       Text="00:00"
+                                       FontFamily="{StaticResource MonoFont}"
+                                       FontSize="11.5"
+                                       FontWeight="SemiBold"
+                                       Foreground="#FBBF24"
+                                       HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- 퇴근 (퇴근 상태일 때만 표시) -->
+                    <StackPanel x:Name="ColClockOutPanel"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center"
+                                Visibility="Collapsed">
+                        <Border x:Name="DivClockOut"
+                                Width="1"
+                                Background="#27272A"
+                                Margin="7,2"
+                                VerticalAlignment="Stretch"/>
+                        <StackPanel x:Name="ColClockOut" VerticalAlignment="Center" MinWidth="34">
+                            <TextBlock x:Name="HeaderClockOutText"
+                                       Text="퇴근"
+                                       FontFamily="{StaticResource SansFont}"
+                                       FontSize="9.5"
+                                       FontWeight="SemiBold"
+                                       Foreground="#A1A1AA"
+                                       HorizontalAlignment="Center"
+                                       Margin="0,0,0,1"/>
+                            <TextBlock x:Name="ValClockOutText"
+                                       Text="--:--"
+                                       FontFamily="{StaticResource MonoFont}"
+                                       FontSize="11.5"
+                                       FontWeight="SemiBold"
+                                       Foreground="#FAFAFA"
+                                       HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
 
                 <!-- 2. Divider + Icon Action Bar (Hidden in Mini Mode, Shown on Hover) -->
                 <StackPanel x:Name="ActionPanel"

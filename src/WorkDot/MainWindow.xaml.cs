@@ -38,6 +38,7 @@ public partial class MainWindow : Window
     private DateTime _lastInteractionUtc = DateTime.UtcNow;
     private bool _isIdleElapsedVisible;
     private int _lastRenderedWorkedMinute = -1;
+    private int _lastRenderedBreakMinute = -1;
 
     public MainWindow()
     {
@@ -168,9 +169,12 @@ public partial class MainWindow : Window
     {
         _attendanceService.CheckDateRollover();
         var snapshot = _attendanceService.CurrentSnapshot;
+        DateTime now = DateTime.Now;
         bool isWorkingOrBreak = snapshot.Status == WorkStatusKind.Working || snapshot.Status == WorkStatusKind.Break;
-        int currentWorkedMin = (int)(snapshot.GetWorkingElapsedSpanExcludingBreaks(DateTime.Now)?.TotalMinutes ?? -1);
-        bool minuteChanged = isWorkingOrBreak && currentWorkedMin != _lastRenderedWorkedMinute;
+        int currentWorkedMin = (int)(snapshot.GetWorkingElapsedSpanExcludingBreaks(now)?.TotalMinutes ?? -1);
+        int currentBreakMin = isWorkingOrBreak ? (int)snapshot.GetUserBreakElapsedSpan(now).TotalMinutes : -1;
+        bool minuteChanged = isWorkingOrBreak &&
+            (currentWorkedMin != _lastRenderedWorkedMinute || currentBreakMin != _lastRenderedBreakMinute);
 
         if (_isPointerDown || IsMouseOver || OverlayContextMenu.IsOpen)
         {
@@ -202,6 +206,7 @@ public partial class MainWindow : Window
     {
         var settings = _settingsService.Current;
         var snapshot = _attendanceService.CurrentSnapshot;
+        DateTime now = DateTime.Now;
 
         Topmost = settings.AlwaysOnTop;
         ShowInTaskbar = false;
@@ -214,7 +219,12 @@ public partial class MainWindow : Window
         {
             try
             {
-                SubStatusText.FontFamily = new System.Windows.Media.FontFamily(settings.TimeFontFamily);
+                var timeFont = new System.Windows.Media.FontFamily(settings.TimeFontFamily);
+                SubStatusText.FontFamily = timeFont;
+                ValClockInText.FontFamily = timeFont;
+                ValWorkText.FontFamily = timeFont;
+                ValBreakText.FontFamily = timeFont;
+                ValClockOutText.FontFamily = timeFont;
             }
             catch
             {
@@ -222,22 +232,56 @@ public partial class MainWindow : Window
             }
         }
 
+        double categoryFontSize = Math.Clamp(settings.CategoryFontSize, 7.0, 18.0);
+        double timeFontSize = Math.Clamp(settings.TimeFontSize, 8.0, 22.0);
+        HeaderClockInText.FontSize = categoryFontSize;
+        HeaderWorkText.FontSize = categoryFontSize;
+        HeaderBreakText.FontSize = categoryFontSize;
+        HeaderClockOutText.FontSize = categoryFontSize;
+        SubStatusText.FontSize = timeFontSize;
+        ValClockInText.FontSize = timeFontSize;
+        ValWorkText.FontSize = timeFontSize;
+        ValBreakText.FontSize = timeFontSize;
+        ValClockOutText.FontSize = timeFontSize;
+
         bool isLightTheme = _settingsService.IsEffectiveLightTheme();
         System.Windows.Media.Color iconFgColor;
+        SolidColorBrush dividerBrush;
+        SolidColorBrush headerMutedBrush;
+        SolidColorBrush primaryTextBrush;
+        SolidColorBrush offWorkGrayBrush;
+        SolidColorBrush yellowBreakBrush;
+
         if (isLightTheme)
         {
+            dividerBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E4E4E7"));
+            headerMutedBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#71717A"));
+            primaryTextBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#18181B"));
+            offWorkGrayBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#71717A"));
+            yellowBreakBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#D97706"));
+
             CapsuleBorder.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#FFFFFF"));
-            CapsuleBorder.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E4E4E7"));
-            ActionDivider.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E4E4E7"));
+            CapsuleBorder.BorderBrush = dividerBrush;
+            ActionDivider.Background = dividerBrush;
             iconFgColor = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#52525B");
         }
         else
         {
+            dividerBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#27272A"));
+            headerMutedBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#A1A1AA"));
+            primaryTextBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#FAFAFA"));
+            offWorkGrayBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#71717A"));
+            yellowBreakBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#FBBF24"));
+
             CapsuleBorder.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#09090B"));
-            CapsuleBorder.BorderBrush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#27272A"));
-            ActionDivider.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#27272A"));
+            CapsuleBorder.BorderBrush = dividerBrush;
+            ActionDivider.Background = dividerBrush;
             iconFgColor = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#A1A1AA");
         }
+
+        DivWork.Background = dividerBrush;
+        DivBreak.Background = dividerBrush;
+        DivClockOut.Background = dividerBrush;
 
         ApplyGhostButtonTheme(iconFgColor);
 
@@ -250,9 +294,10 @@ public partial class MainWindow : Window
         bool isBreak = snapshot.Status == WorkStatusKind.Break;
         bool isWorkingOrBreak = isWorking || isBreak;
 
-        TimeSpan? workedSpan = isWorkingOrBreak ? snapshot.GetWorkingElapsedSpanExcludingBreaks(DateTime.Now) : null;
+        TimeSpan? workedSpan = isWorkingOrBreak ? snapshot.GetWorkingElapsedSpanExcludingBreaks(now) : null;
         double workedMinutes = workedSpan?.TotalMinutes ?? 0.0;
         _lastRenderedWorkedMinute = isWorkingOrBreak ? (int)workedMinutes : -1;
+        _lastRenderedBreakMinute = isWorkingOrBreak ? (int)snapshot.GetUserBreakElapsedSpan(now).TotalMinutes : -1;
 
         double gaugeRatio = isWorkingOrBreak ? Math.Clamp(workedMinutes / TargetWorkHoursMinutes, 0.0, 1.0) : 0.0;
         bool isFull8Hours = isWorkingOrBreak && workedMinutes >= TargetWorkHoursMinutes;
@@ -303,34 +348,122 @@ public partial class MainWindow : Window
             ? $"{stateTitle} ({elapsedText} / 08:00 · {pct}%) · {snapshot.SubText} ({actionHint})"
             : $"{stateTitle} · {snapshot.SubText} ({actionHint})";
 
-        // 2. 드래그 중에는 무조건 미니모드(텍스트 숨김), 평소에는 10초 이상 미조작 시에만 근무중인 시간 표시
-        if (_hasMovedDuringDrag)
+        // 2. 위젯 확장 모드 vs 기본(미니) 모드 표시 분기
+        if (settings.WidgetExpandedMode)
         {
-            SubStatusText.Text = string.Empty;
-            SubStatusText.Visibility = Visibility.Collapsed;
-        }
-        else if (_isActionBusy)
-        {
-            SubStatusText.Text = "...";
-            SubStatusText.Foreground = activeBrush;
-            SubStatusText.Visibility = Visibility.Visible;
-        }
-        else if (snapshot.Status == WorkStatusKind.NeedsLogin)
-        {
-            SubStatusText.Text = "로그인";
-            SubStatusText.Foreground = new SolidColorBrush(redFullColor);
-            SubStatusText.Visibility = Visibility.Visible;
-        }
-        else if (_isIdleElapsedVisible && isWorkingOrBreak && !string.IsNullOrWhiteSpace(elapsedText))
-        {
-            SubStatusText.Text = elapsedText;
-            SubStatusText.Foreground = activeBrush;
-            SubStatusText.Visibility = Visibility.Visible;
+            if (_isActionBusy)
+            {
+                ExpandedSummaryPanel.Visibility = Visibility.Collapsed;
+                SubStatusText.Text = "...";
+                SubStatusText.Foreground = activeBrush;
+                SubStatusText.Visibility = Visibility.Visible;
+            }
+            else if (snapshot.Status == WorkStatusKind.NeedsLogin)
+            {
+                ExpandedSummaryPanel.Visibility = Visibility.Collapsed;
+                SubStatusText.Text = "로그인";
+                SubStatusText.Foreground = new SolidColorBrush(redFullColor);
+                SubStatusText.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                SubStatusText.Text = string.Empty;
+                SubStatusText.Visibility = Visibility.Collapsed;
+
+                bool showClockIn = settings.ShowClockInColumn;
+                bool showWork = settings.ShowWorkColumn;
+                bool showBreak = settings.ShowBreakColumn && (isWorkingOrBreak ? snapshot.HasUserBreak(now) : true);
+                bool showClockOut = settings.ShowClockOutColumn && !isWorkingOrBreak;
+
+                ColClockIn.Visibility = showClockIn ? Visibility.Visible : Visibility.Collapsed;
+
+                ColWork.Visibility = showWork ? Visibility.Visible : Visibility.Collapsed;
+                DivWork.Visibility = (showWork && showClockIn) ? Visibility.Visible : Visibility.Collapsed;
+
+                ColBreakPanel.Visibility = showBreak ? Visibility.Visible : Visibility.Collapsed;
+                DivBreak.Visibility = (showBreak && (showClockIn || showWork)) ? Visibility.Visible : Visibility.Collapsed;
+
+                ColClockOutPanel.Visibility = showClockOut ? Visibility.Visible : Visibility.Collapsed;
+                DivClockOut.Visibility = (showClockOut && (showClockIn || showWork || showBreak)) ? Visibility.Visible : Visibility.Collapsed;
+
+                bool anyVisible = showClockIn || showWork || showBreak || showClockOut;
+                ExpandedSummaryPanel.Visibility = anyVisible ? Visibility.Visible : Visibility.Collapsed;
+
+                if (isWorkingOrBreak)
+                {
+                    // 출근중 (근무중 / 휴게): 출근 | 근무 (| 휴게 - 휴게는 노란색으로 표시)
+                    HeaderClockInText.Foreground = headerMutedBrush;
+                    ValClockInText.Text = AttendanceSnapshot.FormatClockTimeHm(snapshot.ClockInTimeText);
+                    ValClockInText.Foreground = primaryTextBrush;
+
+                    HeaderWorkText.Foreground = headerMutedBrush;
+                    ValWorkText.Text = !string.IsNullOrWhiteSpace(elapsedText) ? elapsedText : "00:00";
+                    ValWorkText.Foreground = isWorking ? activeBrush : primaryTextBrush;
+
+                    if (showBreak)
+                    {
+                        HeaderBreakText.Foreground = yellowBreakBrush;
+                        ValBreakText.Text = snapshot.GetUserBreakElapsedText(now);
+                        ValBreakText.Foreground = yellowBreakBrush;
+                    }
+                }
+                else
+                {
+                    // 퇴근했을 때 (출근 전 / 당일 퇴근 완료): 모든 항목을 회색으로 표시
+                    bool hasRecordToday = snapshot.HasClockedInToday;
+                    string? totalWorkedText = hasRecordToday ? snapshot.GetWorkingElapsedExcludingBreaks(now) : null;
+
+                    HeaderClockInText.Foreground = offWorkGrayBrush;
+                    ValClockInText.Text = hasRecordToday ? AttendanceSnapshot.FormatClockTimeHm(snapshot.ClockInTimeText) : "--:--";
+                    ValClockInText.Foreground = offWorkGrayBrush;
+
+                    HeaderWorkText.Foreground = offWorkGrayBrush;
+                    ValWorkText.Text = !string.IsNullOrWhiteSpace(totalWorkedText) ? totalWorkedText : "--:--";
+                    ValWorkText.Foreground = offWorkGrayBrush;
+
+                    HeaderBreakText.Foreground = offWorkGrayBrush;
+                    ValBreakText.Text = hasRecordToday ? snapshot.GetUserBreakElapsedText(now) : "--:--";
+                    ValBreakText.Foreground = offWorkGrayBrush;
+
+                    HeaderClockOutText.Foreground = offWorkGrayBrush;
+                    ValClockOutText.Text = hasRecordToday ? AttendanceSnapshot.FormatClockTimeHm(snapshot.ClockOutTimeText) : "--:--";
+                    ValClockOutText.Foreground = offWorkGrayBrush;
+                }
+            }
         }
         else
         {
-            SubStatusText.Text = string.Empty;
-            SubStatusText.Visibility = Visibility.Collapsed;
+            ExpandedSummaryPanel.Visibility = Visibility.Collapsed;
+
+            // 기본 미니모드: 드래그 중에는 텍스트 숨김, 평소에는 10초 이상 미조작 시에만 근무중인 시간 표시
+            if (_hasMovedDuringDrag)
+            {
+                SubStatusText.Text = string.Empty;
+                SubStatusText.Visibility = Visibility.Collapsed;
+            }
+            else if (_isActionBusy)
+            {
+                SubStatusText.Text = "...";
+                SubStatusText.Foreground = activeBrush;
+                SubStatusText.Visibility = Visibility.Visible;
+            }
+            else if (snapshot.Status == WorkStatusKind.NeedsLogin)
+            {
+                SubStatusText.Text = "로그인";
+                SubStatusText.Foreground = new SolidColorBrush(redFullColor);
+                SubStatusText.Visibility = Visibility.Visible;
+            }
+            else if (_isIdleElapsedVisible && isWorkingOrBreak && !string.IsNullOrWhiteSpace(elapsedText))
+            {
+                SubStatusText.Text = elapsedText;
+                SubStatusText.Foreground = activeBrush;
+                SubStatusText.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                SubStatusText.Text = string.Empty;
+                SubStatusText.Visibility = Visibility.Collapsed;
+            }
         }
 
         ImageSource dynamicIcon = _trayService.UpdateTrayAndWindowIcon(snapshot, activeStatusColor);
@@ -696,9 +829,12 @@ public partial class MainWindow : Window
             _longPressTimer.Stop();
             _hasMovedDuringDrag = true;
 
-            // 드래그 시작 시 즉시 미니모드로 축소하여 경계 스냅 기준 크기를 고정
+            // 드래그 시작 시 즉시 호버 액션바를 축소하여 경계 스냅 기준 크기를 고정
             ActionPanel.Visibility = Visibility.Collapsed;
-            SubStatusText.Visibility = Visibility.Collapsed;
+            if (!_settingsService.Current.WidgetExpandedMode)
+            {
+                SubStatusText.Visibility = Visibility.Collapsed;
+            }
             UpdateLayout();
             _snapService.AdjustDragOriginAfterMiniCollapse();
         }
@@ -975,6 +1111,7 @@ public partial class MainWindow : Window
         RecordInteraction();
         _hoverCollapseTimer.Stop();
         OverlayContextMenu.Placement = PlacementMode.MousePoint;
+        MenuExpandedMode.IsChecked = _settingsService.Current.WidgetExpandedMode;
         MenuAlwaysOnTop.IsChecked = _settingsService.Current.AlwaysOnTop;
         MenuRunAtStartup.IsChecked = _settingsService.Current.RunAtStartup;
 
@@ -1006,6 +1143,12 @@ public partial class MainWindow : Window
         _settingsWindow = new SettingsWindow(_settingsService, _autoUpdateService);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
+    }
+
+    private void OnMenuExpandedModeClick(object sender, RoutedEventArgs e)
+    {
+        bool next = MenuExpandedMode.IsChecked;
+        _settingsService.SaveAndApply(s => s.WidgetExpandedMode = next);
     }
 
     private void OnMenuAlwaysOnTopClick(object sender, RoutedEventArgs e)

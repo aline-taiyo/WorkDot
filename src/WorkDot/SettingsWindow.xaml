@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="환경설정"
         Icon="pack://application:,,,/WorkDot;component/Assets/Icons/workdot.ico"
-        Width="440" Height="840"
+        Width="440" Height="880"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -221,6 +221,52 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <Style x:Key="CategoryPillCheckStyle" TargetType="CheckBox">
+            <Setter Property="FontFamily" Value="{StaticResource SansFont}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#71717A"/>
+            <Setter Property="Background" Value="#18181B"/>
+            <Setter Property="BorderBrush" Value="#27272A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="0,6"/>
+            <Setter Property="Margin" Value="2,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Ellipse x:Name="Dot"
+                                         Width="6" Height="6"
+                                         Fill="#52525B"
+                                         Margin="0,0,6,0"
+                                         VerticalAlignment="Center"/>
+                                <ContentPresenter VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#3F3F46"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1A10B981"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#4D10B981"/>
+                                <Setter TargetName="Dot" Property="Fill" Value="#10B981"/>
+                                <Setter Property="Foreground" Value="#FAFAFA"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <!-- shadcn/ui Dialog Container (rounded-xl = 12px) -->
@@ -337,7 +383,7 @@
                                            FontWeight="SemiBold"
                                            Foreground="#FAFAFA"/>
                                 <TextBlock x:Name="OpacityValueText"
-                                           Text="95%"
+                                           Text="100%"
                                            FontFamily="{StaticResource SansFont}"
                                            DockPanel.Dock="Right"
                                            HorizontalAlignment="Right"
@@ -348,7 +394,7 @@
                             <Slider x:Name="OpacitySlider"
                                     Style="{StaticResource ModernFlatSliderStyle}"
                                     Minimum="0.25" Maximum="1.0" SmallChange="0.05" LargeChange="0.1"
-                                    Value="0.95"
+                                    Value="1.0"
                                     ValueChanged="OnOpacitySliderChanged"
                                     Margin="0,0,0,12"/>
 
@@ -362,7 +408,7 @@
                                            VerticalAlignment="Center"/>
                                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" HorizontalAlignment="Right">
                                     <TextBlock x:Name="ScaleValueText"
-                                               Text="100%"
+                                               Text="200%"
                                                FontFamily="{StaticResource SansFont}"
                                                Foreground="#A1A1AA"
                                                FontWeight="Medium"
@@ -378,7 +424,7 @@
                             <Slider x:Name="ScaleSlider"
                                     Style="{StaticResource ModernFlatSliderStyle}"
                                     Minimum="0.70" Maximum="3.00" SmallChange="0.05" LargeChange="0.1"
-                                    Value="1.0"
+                                    Value="2.0"
                                     ValueChanged="OnScaleSliderChanged"/>
                         </StackPanel>
                     </Border>
@@ -483,6 +529,105 @@
                     <!-- 4. Behavior & Auto-Update Switches -->
                     <Border Style="{StaticResource ShadcnCardStyle}">
                         <StackPanel>
+                            <CheckBox x:Name="ExpandedModeCheck"
+                                      Style="{StaticResource ModernToggleSwitchStyle}"
+                                      Margin="0,0,0,10"
+                                      Checked="OnBehaviorCheckChanged"
+                                      Unchecked="OnBehaviorCheckChanged">
+                                <StackPanel>
+                                    <TextBlock Text="위젯 확장 모드" FontSize="13" FontWeight="Medium" Foreground="#FAFAFA"/>
+                                    <TextBlock Text="출근·근무·휴게·퇴근 카테고리별 시간을 위젯에 표시합니다." FontSize="11.5" Foreground="#71717A" Margin="0,1,0,0"/>
+                                </StackPanel>
+                            </CheckBox>
+
+                            <!-- 확장 모드 세부 설정 (표시 항목 & 글자 크기) -->
+                            <Border x:Name="ExpandedModeOptionsPanel"
+                                    Background="#09090B"
+                                    BorderBrush="#27272A"
+                                    BorderThickness="1"
+                                    CornerRadius="7"
+                                    Padding="12,10"
+                                    Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="표시 항목 선택"
+                                               FontFamily="{StaticResource SansFont}"
+                                               FontSize="12"
+                                               FontWeight="SemiBold"
+                                               Foreground="#D4D4D8"
+                                               Margin="0,0,0,6"/>
+
+                                    <UniformGrid Columns="4" Margin="-2,0,-2,12">
+                                        <CheckBox x:Name="ShowClockInCheck"
+                                                  Style="{StaticResource CategoryPillCheckStyle}"
+                                                  Content="출근"
+                                                  Checked="OnBehaviorCheckChanged"
+                                                  Unchecked="OnBehaviorCheckChanged"/>
+                                        <CheckBox x:Name="ShowWorkCheck"
+                                                  Style="{StaticResource CategoryPillCheckStyle}"
+                                                  Content="근무"
+                                                  Checked="OnBehaviorCheckChanged"
+                                                  Unchecked="OnBehaviorCheckChanged"/>
+                                        <CheckBox x:Name="ShowBreakCheck"
+                                                  Style="{StaticResource CategoryPillCheckStyle}"
+                                                  Content="휴게"
+                                                  Checked="OnBehaviorCheckChanged"
+                                                  Unchecked="OnBehaviorCheckChanged"/>
+                                        <CheckBox x:Name="ShowClockOutCheck"
+                                                  Style="{StaticResource CategoryPillCheckStyle}"
+                                                  Content="퇴근"
+                                                  Checked="OnBehaviorCheckChanged"
+                                                  Unchecked="OnBehaviorCheckChanged"/>
+                                    </UniformGrid>
+
+                                    <DockPanel Margin="0,0,0,5">
+                                        <TextBlock Text="출근/근무/휴게/퇴근 글자 크기"
+                                                   FontFamily="{StaticResource SansFont}"
+                                                   FontSize="12"
+                                                   FontWeight="Medium"
+                                                   Foreground="#D4D4D8"/>
+                                        <TextBlock x:Name="CategoryFontSizeValueText"
+                                                   Text="7.0pt"
+                                                   FontFamily="{StaticResource SansFont}"
+                                                   DockPanel.Dock="Right"
+                                                   HorizontalAlignment="Right"
+                                                   Foreground="#A1A1AA"
+                                                   FontWeight="Medium"
+                                                   FontSize="11.5"/>
+                                    </DockPanel>
+                                    <Slider x:Name="CategoryFontSizeSlider"
+                                            Style="{StaticResource ModernFlatSliderStyle}"
+                                            Minimum="7.0" Maximum="18.0" SmallChange="0.5" LargeChange="1.0"
+                                            TickFrequency="0.5" IsSnapToTickEnabled="True"
+                                            Value="7.0"
+                                            ValueChanged="OnCategoryFontSizeSliderChanged"
+                                            Margin="0,0,0,10"/>
+
+                                    <DockPanel Margin="0,0,0,5">
+                                        <TextBlock Text="시간 숫자 글자 크기"
+                                                   FontFamily="{StaticResource SansFont}"
+                                                   FontSize="12"
+                                                   FontWeight="Medium"
+                                                   Foreground="#D4D4D8"/>
+                                        <TextBlock x:Name="TimeFontSizeValueText"
+                                                   Text="11.5pt"
+                                                   FontFamily="{StaticResource SansFont}"
+                                                   DockPanel.Dock="Right"
+                                                   HorizontalAlignment="Right"
+                                                   Foreground="#A1A1AA"
+                                                   FontWeight="Medium"
+                                                   FontSize="11.5"/>
+                                    </DockPanel>
+                                    <Slider x:Name="TimeFontSizeSlider"
+                                            Style="{StaticResource ModernFlatSliderStyle}"
+                                            Minimum="8.0" Maximum="22.0" SmallChange="0.5" LargeChange="1.0"
+                                            TickFrequency="0.5" IsSnapToTickEnabled="True"
+                                            Value="11.5"
+                                            ValueChanged="OnTimeFontSizeSliderChanged"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Height="1" Background="#1F1F23" Margin="0,0,0,10"/>
+
                             <CheckBox x:Name="AlwaysOnTopCheck"
                                       Style="{StaticResource ModernToggleSwitchStyle}"
                                       Margin="0,0,0,10"
