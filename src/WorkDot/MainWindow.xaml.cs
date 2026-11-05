@@ -374,16 +374,21 @@ public partial class MainWindow : Window
                 bool showWork = settings.ShowWorkColumn;
                 bool showBreak = settings.ShowBreakColumn && (isWorkingOrBreak ? snapshot.HasUserBreak(now) : true);
                 bool showClockOut = settings.ShowClockOutColumn && !isWorkingOrBreak;
+                bool showCategoryLabels = settings.ShowCategoryLabels;
 
                 ColClockIn.Visibility = showClockIn ? Visibility.Visible : Visibility.Collapsed;
+                HeaderClockInText.Visibility = (showClockIn && showCategoryLabels) ? Visibility.Visible : Visibility.Collapsed;
 
                 ColWork.Visibility = showWork ? Visibility.Visible : Visibility.Collapsed;
+                HeaderWorkText.Visibility = (showWork && showCategoryLabels) ? Visibility.Visible : Visibility.Collapsed;
                 DivWork.Visibility = (showWork && showClockIn) ? Visibility.Visible : Visibility.Collapsed;
 
                 ColBreakPanel.Visibility = showBreak ? Visibility.Visible : Visibility.Collapsed;
+                HeaderBreakText.Visibility = (showBreak && showCategoryLabels) ? Visibility.Visible : Visibility.Collapsed;
                 DivBreak.Visibility = (showBreak && (showClockIn || showWork)) ? Visibility.Visible : Visibility.Collapsed;
 
                 ColClockOutPanel.Visibility = showClockOut ? Visibility.Visible : Visibility.Collapsed;
+                HeaderClockOutText.Visibility = (showClockOut && showCategoryLabels) ? Visibility.Visible : Visibility.Collapsed;
                 DivClockOut.Visibility = (showClockOut && (showClockIn || showWork || showBreak)) ? Visibility.Visible : Visibility.Collapsed;
 
                 bool anyVisible = showClockIn || showWork || showBreak || showClockOut;
@@ -1112,6 +1117,8 @@ public partial class MainWindow : Window
         _hoverCollapseTimer.Stop();
         OverlayContextMenu.Placement = PlacementMode.MousePoint;
         MenuExpandedMode.IsChecked = _settingsService.Current.WidgetExpandedMode;
+        MenuShowCategoryLabels.IsChecked = _settingsService.Current.ShowCategoryLabels;
+        MenuShowCategoryLabels.Visibility = _settingsService.Current.WidgetExpandedMode ? Visibility.Visible : Visibility.Collapsed;
         MenuAlwaysOnTop.IsChecked = _settingsService.Current.AlwaysOnTop;
         MenuRunAtStartup.IsChecked = _settingsService.Current.RunAtStartup;
 
@@ -1149,6 +1156,12 @@ public partial class MainWindow : Window
     {
         bool next = MenuExpandedMode.IsChecked;
         _settingsService.SaveAndApply(s => s.WidgetExpandedMode = next);
+    }
+
+    private void OnMenuShowCategoryLabelsClick(object sender, RoutedEventArgs e)
+    {
+        bool next = MenuShowCategoryLabels.IsChecked;
+        _settingsService.SaveAndApply(s => s.ShowCategoryLabels = next);
     }
 
     private void OnMenuAlwaysOnTopClick(object sender, RoutedEventArgs e)

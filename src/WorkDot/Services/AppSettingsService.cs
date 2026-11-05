@@ -28,6 +28,7 @@ public sealed class AppSettings
     public double? WidgetLeft { get; set; }                  // 이전 위젯 X 위치 (DIP)
     public double? WidgetTop { get; set; }                   // 이전 위젯 Y 위치 (DIP)
     public bool WidgetExpandedMode { get; set; } = true;     // 위젯 확장 모드 (기본 활성화)
+    public bool ShowCategoryLabels { get; set; } = true;     // 확장 모드: 출근·근무·휴게·퇴근 라벨 글자 표시 여부
     public double CategoryFontSize { get; set; } = 7.0;      // 확장 모드 카테고리 라벨 글자 크기 (7.0 ~ 18.0, 기본 7pt)
     public double TimeFontSize { get; set; } = 11.5;         // 확장 모드/시간 숫자 글자 크기 (8.0 ~ 22.0, 기본 11.5pt)
     public bool ShowClockInColumn { get; set; } = true;      // 확장 모드: 출근 표시 여부

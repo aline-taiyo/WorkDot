@@ -47,6 +47,7 @@
                 <MenuItem Header="새로고침" Click="OnRefreshClick"/>
                 <Separator/>
                 <MenuItem x:Name="MenuExpandedMode" Header="위젯 확장 모드" IsCheckable="True" Click="OnMenuExpandedModeClick"/>
+                <MenuItem x:Name="MenuShowCategoryLabels" Header="카테고리 글자 표시" IsCheckable="True" Click="OnMenuShowCategoryLabelsClick"/>
                 <MenuItem x:Name="MenuAlwaysOnTop" Header="항상 위에 표시" IsCheckable="True" Click="OnMenuAlwaysOnTopClick"/>
                 <MenuItem x:Name="MenuRunAtStartup" Header="Windows 시작 시 자동 실행" IsCheckable="True" Click="OnMenuRunAtStartupClick"/>
                 <MenuItem Header="위젯 크기">

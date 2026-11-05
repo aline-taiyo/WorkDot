@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
-    <Version>1.5.17</Version>
+    <Version>1.5.18</Version>
     <!-- AssemblyVersion/FileVersion은 Version에서 자동 파생된다. 따로 고정하면 자동 업데이트 버전 비교가 깨져 무한 업데이트가 발생한다. -->
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <FileVersion>$(Version).0</FileVersion>

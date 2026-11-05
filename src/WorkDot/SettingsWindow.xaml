@@ -579,7 +579,20 @@
                                                   Unchecked="OnBehaviorCheckChanged"/>
                                     </UniformGrid>
 
-                                    <DockPanel Margin="0,0,0,5">
+                                    <Border Height="1" Background="#1F1F23" Margin="0,0,0,10"/>
+
+                                    <CheckBox x:Name="ShowCategoryLabelsCheck"
+                                              Style="{StaticResource ModernToggleSwitchStyle}"
+                                              Margin="0,0,0,10"
+                                              Checked="OnBehaviorCheckChanged"
+                                              Unchecked="OnBehaviorCheckChanged">
+                                        <StackPanel>
+                                            <TextBlock Text="출근/근무/휴게/퇴근 글자 표시" FontSize="12" FontWeight="SemiBold" Foreground="#FAFAFA"/>
+                                            <TextBlock Text="라벨 글자를 표시합니다. 끄면 시간 숫자만 표시됩니다." FontSize="11" Foreground="#71717A" Margin="0,1,0,0"/>
+                                        </StackPanel>
+                                    </CheckBox>
+
+                                    <DockPanel x:Name="CategoryFontSizeHeaderPanel" Margin="0,0,0,5">
                                         <TextBlock Text="출근/근무/휴게/퇴근 글자 크기"
                                                    FontFamily="{StaticResource SansFont}"
                                                    FontSize="12"

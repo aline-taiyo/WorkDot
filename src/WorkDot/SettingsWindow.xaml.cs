@@ -182,6 +182,8 @@ public partial class SettingsWindow : Window
             ShowWorkCheck.IsChecked = s.ShowWorkColumn;
             ShowBreakCheck.IsChecked = s.ShowBreakColumn;
             ShowClockOutCheck.IsChecked = s.ShowClockOutColumn;
+            ShowCategoryLabelsCheck.IsChecked = s.ShowCategoryLabels;
+            UpdateCategoryFontSizeControlState(s.ShowCategoryLabels);
 
             CategoryFontSizeSlider.Value = s.CategoryFontSize;
             CategoryFontSizeValueText.Text = $"{s.CategoryFontSize:0.#}pt";
@@ -360,6 +362,14 @@ public partial class SettingsWindow : Window
         _settingsService.SaveAndApply(s => s.TimeFontSize = val);
     }
 
+    private void UpdateCategoryFontSizeControlState(bool enabled)
+    {
+        if (CategoryFontSizeHeaderPanel != null)
+            CategoryFontSizeHeaderPanel.Opacity = enabled ? 1.0 : 0.45;
+        if (CategoryFontSizeSlider != null)
+            CategoryFontSizeSlider.IsEnabled = enabled;
+    }
+
     private void OnBehaviorCheckChanged(object sender, RoutedEventArgs e)
     {
         if (_isLoadingUi || _settingsService == null)
@@ -370,9 +380,12 @@ public partial class SettingsWindow : Window
         bool showWork = ShowWorkCheck.IsChecked == true;
         bool showBreak = ShowBreakCheck.IsChecked == true;
         bool showClockOut = ShowClockOutCheck.IsChecked == true;
+        bool showCategoryLabels = ShowCategoryLabelsCheck.IsChecked == true;
         bool topMost = AlwaysOnTopCheck.IsChecked == true;
         bool startup = RunAtStartupCheck.IsChecked == true;
         bool autoUpdate = AutoUpdateCheck.IsChecked == true;
+
+        UpdateCategoryFontSizeControlState(showCategoryLabels);
 
         _settingsService.SaveAndApply(s =>
         {
@@ -381,6 +394,7 @@ public partial class SettingsWindow : Window
             s.ShowWorkColumn = showWork;
             s.ShowBreakColumn = showBreak;
             s.ShowClockOutColumn = showClockOut;
+            s.ShowCategoryLabels = showCategoryLabels;
             s.AlwaysOnTop = topMost;
             s.RunAtStartup = startup;
             s.AutoUpdateEnabled = autoUpdate;
