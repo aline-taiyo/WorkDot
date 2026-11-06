@@ -29,6 +29,8 @@
     <Geometry x:Key="GeomClose">M 3,3 L 11,11 M 11,3 L 3,11</Geometry>
     <!-- Back Chevron -->
     <Geometry x:Key="GeomBack">M 8.5,2.5 L 4,7 L 8.5,11.5</Geometry>
+    <!-- Forward Chevron -->
+    <Geometry x:Key="GeomForward">M 5.5,2.5 L 10,7 L 5.5,11.5</Geometry>
     <!-- Check -->
     <Geometry x:Key="GeomCheck">M 2.5,7.2 L 5.5,10.2 L 11.5,3.8</Geometry>
 

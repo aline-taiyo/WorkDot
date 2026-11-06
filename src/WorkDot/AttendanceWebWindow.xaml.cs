@@ -164,23 +164,30 @@ public partial class AttendanceWebWindow : Window
         }
     }
 
-    private void OnWindowClosing(object? sender, CancelEventArgs e)
+    private async void OnWindowClosing(object? sender, CancelEventArgs e)
     {
         if (_isAppShuttingDown)
             return;
 
         e.Cancel = true;
-        HideToBackground();
+        await SyncAndCloseToBackgroundAsync();
     }
 
-    /// <summary>창을 숨기고 백그라운드 동기화로 전환한다 (다른 메뉴를 보고 있었다면 근태 페이지로 복귀)</summary>
-    private void HideToBackground()
+    /// <summary>브라우저 창을 닫을 때 '동기화 및 닫기'와 동일하게 근태 상태를 동기화하고 백그라운드로 숨긴다.</summary>
+    private async Task SyncAndCloseToBackgroundAsync()
     {
+        _attendanceService.ClearManualStatusOverride();
         _isInteractiveRequested = false;
         _attendanceService.IsInteractiveBrowsing = false;
         ShowInTaskbar = false;
         Hide();
-        _ = _attendanceService.RefreshStatusAsync();
+
+        if (PortalWebView.CoreWebView2 != null)
+        {
+            await _attendanceService.ProbeDomAndApiStatusAsync(PortalWebView.CoreWebView2);
+        }
+
+        await _attendanceService.RefreshStatusAsync();
     }
 
     private void OnBackClick(object sender, RoutedEventArgs e)
@@ -188,6 +195,14 @@ public partial class AttendanceWebWindow : Window
         if (PortalWebView.CoreWebView2?.CanGoBack == true)
         {
             PortalWebView.CoreWebView2.GoBack();
+        }
+    }
+
+    private void OnForwardClick(object sender, RoutedEventArgs e)
+    {
+        if (PortalWebView.CoreWebView2?.CanGoForward == true)
+        {
+            PortalWebView.CoreWebView2.GoForward();
         }
     }
 
@@ -203,18 +218,29 @@ public partial class AttendanceWebWindow : Window
         }
     }
 
-    private async void OnDismissPopupsClick(object sender, RoutedEventArgs e)
+    private void OnUrlTextKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        if (PortalWebView.CoreWebView2 == null)
+        if (e.Key != Key.Enter || PortalWebView.CoreWebView2 == null)
             return;
 
-        await _attendanceService.DismissBlockingPopupsAndSurveysAsync(PortalWebView.CoreWebView2);
+        string target = (UrlText.Text ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(target))
+            return;
 
-        // 팝업만 닫고 현재 보고 있는 페이지는 유지한다 (근태 페이지 이동은 '홈' 버튼으로)
-        string current = PortalWebView.CoreWebView2.Source ?? string.Empty;
-        if (current.Contains("/ehr/app/attend", StringComparison.OrdinalIgnoreCase))
+        if (!target.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !target.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
-            await _attendanceService.ProbeDomAndApiStatusAsync(PortalWebView.CoreWebView2);
+            target = "https://" + target;
+        }
+
+        try
+        {
+            PortalWebView.CoreWebView2.Navigate(target);
+            e.Handled = true;
+        }
+        catch
+        {
+            // Ignore invalid URL navigation errors
         }
     }
 
@@ -246,15 +272,5 @@ public partial class AttendanceWebWindow : Window
         {
             try { PortalWebView.CoreWebView2.Reload(); } catch { }
         }
-    }
-
-    private async void OnSyncAndCloseClick(object sender, RoutedEventArgs e)
-    {
-        _attendanceService.ClearManualStatusOverride();
-        if (PortalWebView.CoreWebView2 != null)
-        {
-            await _attendanceService.ProbeDomAndApiStatusAsync(PortalWebView.CoreWebView2);
-        }
-        HideToBackground();
     }
 }
