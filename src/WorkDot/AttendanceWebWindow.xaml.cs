@@ -109,6 +109,8 @@ public partial class AttendanceWebWindow : Window
             {
                 try { PortalWebView.CoreWebView2.Reload(); } catch { }
             }
+
+            await _attendanceService.OnPortalShownInteractiveAsync();
         }
     }
 

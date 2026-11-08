@@ -738,6 +738,12 @@ public partial class MainWindow : Window
             ((UIElement)sender).ReleaseMouseCapture();
 
             var curStatus = _attendanceService.CurrentSnapshot.Status;
+            if (curStatus == WorkStatusKind.NeedsLogin)
+            {
+                OpenPortalWindow();
+                e.Handled = true;
+                return;
+            }
             if (curStatus == WorkStatusKind.Working)
             {
                 var confirmPopup = new ConfirmClockOutWindow(this, "휴게 할래요?", "#F59E0B");
@@ -979,6 +985,11 @@ public partial class MainWindow : Window
             return;
 
         var snapshot = _attendanceService.CurrentSnapshot;
+        if (snapshot.Status == WorkStatusKind.NeedsLogin)
+        {
+            OpenPortalWindow();
+            return;
+        }
 
         // 근무중 또는 휴게 상태일 때 꾹 누르고 위젯 안에서 떼면 "퇴근 할래요?" Y/N 팝업 표시
         if (snapshot.Status == WorkStatusKind.Working || snapshot.Status == WorkStatusKind.Break)
