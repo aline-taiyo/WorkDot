@@ -4,6 +4,16 @@ WorkDot의 모든 주요 변경 사항 및 버전별 릴리즈 노트입니다.
 
 ---
 
+## [v1.5.21] - 2026-11-09
+
+### 🚀 신규 기능 및 개선 (Features & Improvements)
+- **오직 명시적 유저 액션(출근 시도 등) 시점에만 로그인 및 페이지 갱신 수행**:
+  - 백그라운드 타이머(`RefreshStatusAsync`), 자정 날짜 변경(`CheckDateRollover`), 또는 과거 날짜 페이지 감지(`PAGE_OUTDATED_NEEDS_RELOAD`) 시 백그라운드에서 다우오피스 URL 이동(`Navigate`) 및 로그인 시도(`TryAutoLoginIfPossibleAsync`)를 일절 수행하지 않도록 변경했습니다.
+  - 사용자가 **출근 / 퇴근 / 업무 복귀 / 휴게 / 새로고침 / 근태홈 열기** 등 명시적인 유저 액션을 실행했을 때만(`EnsureFreshAttendancePageForUserActionAsync`) 페이지 갱신 및 저장된 계정 1차 자동 로그인을 시도하며, 2차 인증(OTP)이 필요한 경우 즉시 다우오피스 로그인 창을 화면에 띄워줍니다.
+  - 다우오피스 최신 홈 URL(`/home`)도 근태 가젯 유효 경로(`IsAttendanceCapableUrl`)로 인식하여 불필요한 백그라운드 리다이렉트를 제거했습니다.
+
+---
+
 ## [v1.5.20] - 2026-11-08
 
 ### 🐛 버그 수정 (Bug Fixes)

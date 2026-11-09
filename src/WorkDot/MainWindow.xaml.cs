@@ -1072,7 +1072,11 @@ public partial class MainWindow : Window
         try
         {
             _attendanceService.SetManualStatusOverride(WorkStatusKind.Working);
-            await _attendanceService.TriggerResumeWorkActionAsync();
+            var (success, _) = await _attendanceService.TriggerResumeWorkActionAsync();
+            if (!success && _attendanceService.CurrentSnapshot.Status == WorkStatusKind.NeedsLogin)
+            {
+                OpenPortalWindow();
+            }
         }
         finally
         {
@@ -1093,7 +1097,11 @@ public partial class MainWindow : Window
         {
             // 위젯 상태를 즉시 목표 상태(출근/퇴근)로 반영하고 다우오피스 웹 액션도 함께 트리거
             _attendanceService.SetManualStatusOverride(targetClockIn ? WorkStatusKind.Working : WorkStatusKind.OffWork);
-            await _attendanceService.TriggerClockActionAsync(targetClockIn);
+            var (success, _) = await _attendanceService.TriggerClockActionAsync(targetClockIn);
+            if (!success && _attendanceService.CurrentSnapshot.Status == WorkStatusKind.NeedsLogin)
+            {
+                OpenPortalWindow();
+            }
         }
         finally
         {
@@ -1113,7 +1121,11 @@ public partial class MainWindow : Window
         try
         {
             _attendanceService.SetManualStatusOverride(targetBreak ? WorkStatusKind.Break : WorkStatusKind.Working);
-            await _attendanceService.TriggerBreakActionAsync(targetBreak);
+            var (success, _) = await _attendanceService.TriggerBreakActionAsync(targetBreak);
+            if (!success && _attendanceService.CurrentSnapshot.Status == WorkStatusKind.NeedsLogin)
+            {
+                OpenPortalWindow();
+            }
         }
         finally
         {
@@ -1234,7 +1246,11 @@ public partial class MainWindow : Window
     {
         RecordInteraction();
         _attendanceService.ClearManualStatusOverride();
-        await _attendanceService.RefreshStatusAsync();
+        await _attendanceService.RefreshStatusAsync(isUserAction: true);
+        if (_attendanceService.CurrentSnapshot.Status == WorkStatusKind.NeedsLogin)
+        {
+            OpenPortalWindow();
+        }
     }
 
     private void OnForceWorkingClick(object sender, RoutedEventArgs e)

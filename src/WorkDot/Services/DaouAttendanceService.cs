@@ -253,8 +253,8 @@ public sealed class DaouAttendanceService
     private bool _isInitialized;
     private DateTime _lastKnownDate = DateTime.Today;
     private DateTime _lastAutoLoginAttempt = DateTime.MinValue;
-    private DateTime _lastOutdatedReloadAttempt = DateTime.MinValue;
     private bool _hasAttemptedAutoLoginInSession;
+    private bool _isUserActionLoginAllowed;
     private WorkStatusKind? _manualStatusOverride;
     private DateTime _manualOverrideDate;
     private DateTime? _activeBreakStartTime;
@@ -262,9 +262,9 @@ public sealed class DaouAttendanceService
     private readonly List<BreakTimeWindow> _userBreakWindowsToday = new();
 
     /// <summary>
-    /// 자정이 지나 날짜가 변경되었을 때(어제 -> 오늘) 어제의 출퇴근/휴게 상태를 깨끗이 리셋하고,
-    /// 다우오피스 웹뷰를 새 날의 근태 페이지로 새로고침하여 다음날 첫 출근을 준비합니다.
-    /// 단, 이미 세션이 만료되어 로그인 대기(NeedsLogin) 상태일 때는 불필요한 리다이렉트 및 백그라운드 로그인 시도를 하지 않습니다.
+    /// 자정이 지나 날짜가 변경되었을 때(어제 -> 오늘) 어제의 출퇴근/휴게 상태를 로컬에서 깨끗이 리셋합니다.
+    /// 백그라운드에서 다우오피스 페이지 이동이나 로그인 시도는 절대 수행하지 않으며,
+    /// 실제 페이지 갱신 및 로그인 시도는 사용자가 출근 등 유저 액션을 실행할 때 수행합니다.
     /// </summary>
     public void CheckDateRollover()
     {
@@ -277,10 +277,7 @@ public sealed class DaouAttendanceService
             _manualOverrideDate = DateTime.MinValue;
             _activeBreakStartTime = null;
 
-            string currentUrl = _webView?.CoreWebView2?.Source ?? string.Empty;
-            bool isNeedsLogin = IsLoginUrl(currentUrl) || CurrentSnapshot.Status == WorkStatusKind.NeedsLogin;
-
-            if (!isNeedsLogin)
+            if (CurrentSnapshot.Status != WorkStatusKind.NeedsLogin)
             {
                 UpdateSnapshot(new AttendanceSnapshot(
                     WorkStatusKind.OffWork,
@@ -290,11 +287,6 @@ public sealed class DaouAttendanceService
                     null,
                     null,
                     DateTime.Now));
-
-                if (_webView?.CoreWebView2 != null && !IsInteractiveBrowsing)
-                {
-                    _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
-                }
             }
         }
     }
@@ -629,17 +621,18 @@ public sealed class DaouAttendanceService
                     null,
                     DateTime.Now));
 
-                // 백그라운드 상태에서는 자동 로그인을 시도하지 않는다 (2차 인증 메일 무한 발송 방지).
-                // 사용자가 직접 브라우저 창을 열었을 때(IsInteractiveBrowsing)만 1회 자동 로그인을 시도한다.
-                if (IsInteractiveBrowsing && !_hasAttemptedAutoLoginInSession)
+                // 백그라운드에서는 절대 자동 로그인을 시도하지 않는다.
+                // 오직 출근 버튼 클릭, 창 열기 등 명시적 유저 액션(_isUserActionLoginAllowed)이 있을 때만 1회 시도한다.
+                if (_isUserActionLoginAllowed && !_hasAttemptedAutoLoginInSession)
                 {
-                    await TryAutoLoginIfPossibleAsync(coreWebView);
+                    await TryAutoLoginIfPossibleAsync(coreWebView, isUserAction: true);
                 }
                 return;
             }
 
             // 로그인 성공 상태이므로 자동 로그인 시도 플래그 초기화 및 세션 쿠키(GOSSOcookie 등) 영구 승격·백업 저장
             _hasAttemptedAutoLoginInSession = false;
+            _isUserActionLoginAllowed = false;
             await PersistSessionCookiesAsync(coreWebView);
 
             if (ShouldReturnToAttendance(url))
@@ -826,7 +819,7 @@ public sealed class DaouAttendanceService
     }
 
     /// <summary>
-    /// 사용자가 브라우저 창을 직접 열었을 때 현재 로그인 화면에 대기 중이면
+    /// 사용자가 브라우저 창을 직접 열었을 때(유저 액션) 현재 로그인 화면에 대기 중이면
     /// 저장된 자격증명으로 1차 로그인을 1회 보조 수행합니다.
     /// </summary>
     public async Task OnPortalShownInteractiveAsync()
@@ -834,21 +827,22 @@ public sealed class DaouAttendanceService
         if (_webView?.CoreWebView2 == null)
             return;
 
+        _isUserActionLoginAllowed = true;
         string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
         if (IsLoginUrl(currentUrl) && !_hasAttemptedAutoLoginInSession)
         {
-            await TryAutoLoginIfPossibleAsync(_webView.CoreWebView2);
+            await TryAutoLoginIfPossibleAsync(_webView.CoreWebView2, isUserAction: true);
         }
     }
 
     /// <summary>
-    /// 서버 세션이 만료되어 /login 화면으로 이동했을 때,
-    /// 사용자가 브라우저 창을 보고 있는 상태(IsInteractiveBrowsing)에서만 저장된 계정 정보로 1회 자동 입력·로그인합니다.
-    /// (백그라운드에서 몰래 로그인을 시도해 2차 인증 메일이 반복 발송되는 현상을 원천 방지)
+    /// 출근/퇴근/휴게/창 열기 등 명시적인 유저 액션이 발생했을 때만
+    /// 저장된 계정 정보로 1회 자동 입력·로그인을 시도합니다.
+    /// 백그라운드 타이머나 자동 리다이렉트에서는 절대 로그인 시도를 하지 않습니다.
     /// </summary>
-    private async Task<bool> TryAutoLoginIfPossibleAsync(CoreWebView2 coreWebView)
+    private async Task<bool> TryAutoLoginIfPossibleAsync(CoreWebView2 coreWebView, bool isUserAction)
     {
-        if (!IsInteractiveBrowsing || _hasAttemptedAutoLoginInSession)
+        if (!isUserAction || !_isUserActionLoginAllowed || _hasAttemptedAutoLoginInSession)
             return false;
 
         if ((DateTime.Now - _lastAutoLoginAttempt).TotalSeconds < 25)
@@ -938,6 +932,15 @@ public sealed class DaouAttendanceService
         }
     }
 
+    public static bool IsAttendanceCapableUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url) || IsLoginUrl(url))
+            return false;
+
+        return url.Contains("/ehr/", StringComparison.OrdinalIgnoreCase) ||
+               url.Contains("/home", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static bool IsBlockingSurveyOrPopupUrl(string url)
     {
         if (string.IsNullOrWhiteSpace(url))
@@ -999,34 +1002,112 @@ public sealed class DaouAttendanceService
         return 0;
     }
 
-    public async Task RefreshStatusAsync()
+    public async Task RefreshStatusAsync(bool isUserAction = false)
     {
         CheckDateRollover();
 
         if (_webView?.CoreWebView2 == null)
             return;
 
-        string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
-
-        // 로그인 또는 2차 인증 대기 상태일 때는 백그라운드 폴링이 근태 페이지로 강제 이동시키지 않는다.
-        // (강제 이동 시 /login 리다이렉트 및 2차 인증 메일 발송이 무한 반복됨)
-        if (IsLoginUrl(currentUrl) || CurrentSnapshot.Status == WorkStatusKind.NeedsLogin)
-            return;
-
-        bool isOnEhrPage = currentUrl.Contains("/ehr/", StringComparison.OrdinalIgnoreCase);
-        if (!isOnEhrPage)
+        if (!isUserAction)
         {
-            // 사용자가 브라우저 창에서 다른 메뉴를 보거나 로그인 입력 중이면 주기 동기화가 페이지를 빼앗지 않는다.
-            // 창을 닫으면(숨기면) 다음 동기화에서 근태 페이지로 돌아간다.
-            if (IsInteractiveBrowsing)
+            // 백그라운드 주기 폴링: 페이지 강제 이동(Navigate)이나 로그인 시도를 절대 하지 않는다.
+            string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
+            if (IsLoginUrl(currentUrl) || CurrentSnapshot.Status == WorkStatusKind.NeedsLogin)
                 return;
 
-            _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
+            if (!IsAttendanceCapableUrl(currentUrl))
+                return;
+
+            await PersistSessionCookiesAsync(_webView.CoreWebView2);
+            await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
             return;
         }
 
+        // 사용자가 직접 새로고침 등 유저 액션을 실행한 경우에만 페이지 갱신 및 로그인 시도 허용
+        bool ready = await EnsureFreshAttendancePageForUserActionAsync();
+        if (!ready)
+            return;
+
         await PersistSessionCookiesAsync(_webView.CoreWebView2);
         await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
+    }
+
+    /// <summary>
+    /// 출근/퇴근/휴게/새로고침 등 명시적 유저 액션 시점에 호출되어,
+    /// 페이지가 오래되었거나 로그인 화면에 있으면 근태 페이지로 이동 및 1차 자동 로그인을 시도합니다.
+    /// </summary>
+    private async Task<bool> EnsureFreshAttendancePageForUserActionAsync()
+    {
+        if (_webView?.CoreWebView2 == null)
+            return false;
+
+        _isUserActionLoginAllowed = true;
+
+        string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
+        bool needsNavigation = IsLoginUrl(currentUrl) || !IsAttendanceCapableUrl(currentUrl);
+
+        if (!needsNavigation)
+        {
+            try
+            {
+                string rawProbe = await _webView.CoreWebView2.ExecuteScriptAsync(GetAttendanceProbeScript());
+                string? innerJson = JsonSerializer.Deserialize<string>(rawProbe);
+                if (!string.IsNullOrWhiteSpace(innerJson))
+                {
+                    using var doc = JsonDocument.Parse(innerJson);
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("isLoginPage", out var lp) && lp.GetBoolean())
+                    {
+                        needsNavigation = true;
+                    }
+                    else if (root.TryGetProperty("state", out var st) && st.GetString() == "PAGE_OUTDATED_NEEDS_RELOAD")
+                    {
+                        needsNavigation = true;
+                    }
+                }
+            }
+            catch
+            {
+                needsNavigation = true;
+            }
+        }
+
+        if (needsNavigation)
+        {
+            _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
+            await Task.Delay(1800);
+        }
+
+        currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
+        if (IsLoginUrl(currentUrl))
+        {
+            if (!_hasAttemptedAutoLoginInSession)
+            {
+                bool submitted = await TryAutoLoginIfPossibleAsync(_webView.CoreWebView2, isUserAction: true);
+                if (submitted)
+                {
+                    await Task.Delay(1800);
+                    currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
+                }
+            }
+
+            if (IsLoginUrl(currentUrl))
+            {
+                ClearManualStatusOverride();
+                UpdateSnapshot(new AttendanceSnapshot(
+                    WorkStatusKind.NeedsLogin,
+                    "로그인 필요",
+                    "클릭하여 다우오피스 로그인 / 2차 인증 완료",
+                    null,
+                    null,
+                    null,
+                    DateTime.Now));
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public async Task<(bool Success, string Message)> TriggerClockActionAsync(bool clockIn)
@@ -1042,14 +1123,9 @@ public sealed class DaouAttendanceService
         if (_webView?.CoreWebView2 == null)
             return (false, "WebView2가 아직 초기화되지 않았습니다.");
 
-        string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
-        if (IsLoginUrl(currentUrl) || !currentUrl.Contains("/ehr/", StringComparison.OrdinalIgnoreCase))
+        if (!await EnsureFreshAttendancePageForUserActionAsync())
         {
-            _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
-            await Task.Delay(1800);
-            currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
-            if (IsLoginUrl(currentUrl))
-                return (false, "그룹웨어 로그인이 필요합니다. 로그인 창을 열어주세요.");
+            return (false, "그룹웨어 로그인이 필요합니다. 로그인 창을 열어주세요.");
         }
 
         string script = clockIn ? GetClockInTriggerScript() : GetClockOutTriggerScript();
@@ -1101,14 +1177,9 @@ public sealed class DaouAttendanceService
         if (_webView?.CoreWebView2 == null)
             return (false, "WebView2가 아직 초기화되지 않았습니다.");
 
-        string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
-        if (IsLoginUrl(currentUrl) || !currentUrl.Contains("/ehr/", StringComparison.OrdinalIgnoreCase))
+        if (!await EnsureFreshAttendancePageForUserActionAsync())
         {
-            _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
-            await Task.Delay(1800);
-            currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
-            if (IsLoginUrl(currentUrl))
-                return (false, "그룹웨어 로그인이 필요합니다. 로그인 창을 열어주세요.");
+            return (false, "그룹웨어 로그인이 필요합니다. 로그인 창을 열어주세요.");
         }
 
         try
@@ -1162,14 +1233,9 @@ public sealed class DaouAttendanceService
         if (_webView?.CoreWebView2 == null)
             return (false, "WebView2가 아직 초기화되지 않았습니다.");
 
-        string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
-        if (IsLoginUrl(currentUrl) || !currentUrl.Contains("/ehr/", StringComparison.OrdinalIgnoreCase))
+        if (!await EnsureFreshAttendancePageForUserActionAsync())
         {
-            _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
-            await Task.Delay(1800);
-            currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
-            if (IsLoginUrl(currentUrl))
-                return (false, "그룹웨어 로그인이 필요합니다. 로그인 창을 열어주세요.");
+            return (false, "그룹웨어 로그인이 필요합니다. 로그인 창을 열어주세요.");
         }
 
         string script = toBreak ? GetBreakInTriggerScript() : GetBreakOutTriggerScript();
@@ -1447,12 +1513,8 @@ public sealed class DaouAttendanceService
             string state = root.TryGetProperty("state", out var sProp) ? (sProp.GetString() ?? "UNKNOWN") : "UNKNOWN";
             if (state == "PAGE_OUTDATED_NEEDS_RELOAD")
             {
-                if (_webView?.CoreWebView2 != null && !IsInteractiveBrowsing &&
-                    (DateTime.Now - _lastOutdatedReloadAttempt).TotalMinutes >= 10)
-                {
-                    _lastOutdatedReloadAttempt = DateTime.Now;
-                    _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
-                }
+                // 백그라운드에서는 날짜가 지난 페이지를 강제 리로드하지 않는다 (자정/휴일 백그라운드 로그인 유발 방지).
+                // 유저가 출근 등 액션을 실행할 때 EnsureFreshAttendancePageForUserActionAsync에서 갱신한다.
                 return;
             }
 
