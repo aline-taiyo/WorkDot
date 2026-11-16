@@ -45,6 +45,7 @@
                 <MenuItem Header="환경설정" Click="OnOpenSettingsClick"/>
                 <MenuItem Header="근태홈 열기" Click="OnOpenPortalClick"/>
                 <MenuItem Header="새로고침" Click="OnRefreshClick"/>
+                <MenuItem Header="크롬 확장프로그램 설치 폴더 열기" Click="OnOpenExtensionFolderClick"/>
                 <Separator/>
                 <MenuItem x:Name="MenuExpandedMode" Header="위젯 확장 모드" IsCheckable="True" Click="OnMenuExpandedModeClick"/>
                 <MenuItem x:Name="MenuShowCategoryLabels" Header="카테고리 글자 표시" IsCheckable="True" Click="OnMenuShowCategoryLabelsClick"/>

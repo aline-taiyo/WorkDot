@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
@@ -26,7 +27,6 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _idleTimer;
     private readonly DispatcherTimer _hoverCollapseTimer;
 
-    private AttendanceWebWindow? _portalWindow;
     private SettingsWindow? _settingsWindow;
 
     private bool _isPointerDown;
@@ -62,6 +62,7 @@ public partial class MainWindow : Window
             _hotKeyService.Register(s.PortalHotKey);
         });
         _attendanceService.SnapshotChanged += _ => Dispatcher.Invoke(ApplySettingsAndVisuals);
+        _attendanceService.BridgeConnectionChanged += _ => Dispatcher.Invoke(ApplySettingsAndVisuals);
 
         WireTrayEvents();
 
@@ -110,7 +111,7 @@ public partial class MainWindow : Window
             _longPressTimer.Stop();
             _hotKeyService.Dispose();
             _autoUpdateService.Dispose();
-            _portalWindow?.ShutdownClose();
+            _attendanceService.Dispose();
             _trayService.Dispose();
             _snapService.Dispose();
             _settingsService.Dispose();
@@ -143,16 +144,8 @@ public partial class MainWindow : Window
         _hotKeyService.Initialize(this, TogglePortalWindowFromHotKey);
         _hotKeyService.Register(_settingsService.Current.PortalHotKey);
 
-        try
-        {
-            _portalWindow = new AttendanceWebWindow(_attendanceService);
-            await _portalWindow.InitializeInBackgroundAsync();
-            _pollTimer.Start();
-        }
-        catch (Exception ex)
-        {
-            StatusBadgeBorder.ToolTip = $"오류: {ex.Message}";
-        }
+        _pollTimer.Start();
+        await _attendanceService.RefreshStatusAsync();
     }
 
     private void RecordInteraction()
@@ -336,14 +329,26 @@ public partial class MainWindow : Window
 
         string? elapsedText = isWorkingOrBreak ? FormatWorkingElapsedTime(snapshot) : null;
         int pct = (int)Math.Round(gaugeRatio * 100);
-        string stateTitle = isBreak ? "휴게" : (isWorking ? "근무중" : "퇴근");
+        string stateTitle = snapshot.Status switch
+        {
+            WorkStatusKind.Break => "휴게",
+            WorkStatusKind.Working => "근무중",
+            WorkStatusKind.NeedsLogin => "로그인 필요",
+            WorkStatusKind.Unknown => "연결 대기",
+            _ => "퇴근"
+        };
         bool isResume = snapshot.IsResumeWorkAvailable;
         string offWorkActionHint = isResume
             ? "더블클릭/길게 눌러 업무 복귀"
             : "더블클릭/길게 눌러 출근";
-        string actionHint = isBreak
-            ? "더블클릭: 근무중 전환 · 길게 눌러 퇴근"
-            : (isWorking ? "더블클릭: 휴게 전환 · 길게 눌러 퇴근" : offWorkActionHint);
+        string actionHint = snapshot.Status switch
+        {
+            WorkStatusKind.NeedsLogin => "더블클릭/길게 눌러 크롬에서 로그인",
+            WorkStatusKind.Unknown => "우클릭 → 크롬 확장프로그램 설치 폴더 열기",
+            WorkStatusKind.Break => "더블클릭: 근무중 전환 · 길게 눌러 퇴근",
+            WorkStatusKind.Working => "더블클릭: 휴게 전환 · 길게 눌러 퇴근",
+            _ => offWorkActionHint
+        };
         StatusBadgeBorder.ToolTip = isWorkingOrBreak && !string.IsNullOrWhiteSpace(elapsedText)
             ? $"{stateTitle} ({elapsedText} / 08:00 · {pct}%) · {snapshot.SubText} ({actionHint})"
             : $"{stateTitle} · {snapshot.SubText} ({actionHint})";
@@ -744,6 +749,12 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 return;
             }
+            if (curStatus == WorkStatusKind.Unknown && !_attendanceService.IsExtensionConnected)
+            {
+                OpenExtensionInstallFolder(this);
+                e.Handled = true;
+                return;
+            }
             if (curStatus == WorkStatusKind.Working)
             {
                 var confirmPopup = new ConfirmClockOutWindow(this, "휴게 할래요?", "#F59E0B");
@@ -990,6 +1001,11 @@ public partial class MainWindow : Window
             OpenPortalWindow();
             return;
         }
+        if (snapshot.Status == WorkStatusKind.Unknown && !_attendanceService.IsExtensionConnected)
+        {
+            OpenExtensionInstallFolder(this);
+            return;
+        }
 
         // 근무중 또는 휴게 상태일 때 꾹 누르고 위젯 안에서 떼면 "퇴근 할래요?" Y/N 팝업 표시
         if (snapshot.Status == WorkStatusKind.Working || snapshot.Status == WorkStatusKind.Break)
@@ -1034,6 +1050,11 @@ public partial class MainWindow : Window
         if (snapshot.Status == WorkStatusKind.NeedsLogin)
         {
             OpenPortalWindow();
+            return;
+        }
+        if (snapshot.Status == WorkStatusKind.Unknown && !_attendanceService.IsExtensionConnected)
+        {
+            OpenExtensionInstallFolder(this);
             return;
         }
 
@@ -1095,7 +1116,7 @@ public partial class MainWindow : Window
 
         try
         {
-            // 위젯 상태를 즉시 목표 상태(출근/퇴근)로 반영하고 다우오피스 웹 액션도 함께 트리거
+            // 위젯 상태를 즉시 목표 상태(출근/퇴근)로 반영하고 크롬 확장프로그램을 통해 다우오피스 액션 트리거
             _attendanceService.SetManualStatusOverride(targetClockIn ? WorkStatusKind.Working : WorkStatusKind.OffWork);
             var (success, _) = await _attendanceService.TriggerClockActionAsync(targetClockIn);
             if (!success && _attendanceService.CurrentSnapshot.Status == WorkStatusKind.NeedsLogin)
@@ -1150,6 +1171,10 @@ public partial class MainWindow : Window
         {
             MenuClockActionItem.Header = "다우오피스 로그인...";
         }
+        else if (snapshot.Status == WorkStatusKind.Unknown && !_attendanceService.IsExtensionConnected)
+        {
+            MenuClockActionItem.Header = "크롬 확장프로그램 연결 필요...";
+        }
         else if (snapshot.Status == WorkStatusKind.Working)
         {
             MenuClockActionItem.Header = "퇴근하기";
@@ -1170,7 +1195,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _settingsWindow = new SettingsWindow(_settingsService, _autoUpdateService);
+        _settingsWindow = new SettingsWindow(_settingsService, _autoUpdateService, _attendanceService);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
     }
@@ -1216,27 +1241,65 @@ public partial class MainWindow : Window
 
     private void OpenPortalWindow()
     {
-        if (_portalWindow == null || !_portalWindow.IsLoaded || !_portalWindow.IsVisible)
-        {
-            try { _portalWindow?.ShutdownClose(); } catch { }
-            _portalWindow = new AttendanceWebWindow(_attendanceService);
-        }
-        _portalWindow.ShowInteractive();
+        _attendanceService.OpenPortalInBrowser();
     }
 
     private void TogglePortalWindowFromHotKey()
     {
         Dispatcher.Invoke(() =>
         {
-            if (_portalWindow != null && _portalWindow.IsLoaded && _portalWindow.IsVisible && _portalWindow.IsActive)
-            {
-                _portalWindow.Close();
-            }
-            else
-            {
-                OpenPortalWindow();
-            }
+            OpenPortalWindow();
         });
+    }
+
+    private void OnOpenExtensionFolderClick(object sender, RoutedEventArgs e)
+    {
+        RecordInteraction();
+        OpenExtensionInstallFolder(this);
+    }
+
+    public static void OpenExtensionInstallFolder(Window? owner)
+    {
+        ChromeExtensionBridgeService.SyncExtensionFilesToLocalAppData();
+        string extPath = ChromeExtensionBridgeService.InstalledExtensionFolderPath;
+
+        try
+        {
+            System.Windows.Clipboard.SetText(extPath);
+        }
+        catch
+        {
+            // Ignore clipboard lock errors
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{extPath}\"")
+            {
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+            // Ignore explorer launch errors
+        }
+
+        string guide =
+            $"크롬 확장프로그램 폴더 경로가 클립보드에 복사되었습니다.\n\n" +
+            $"경로: {extPath}\n\n" +
+            $"[설치 방법]\n" +
+            $"1. Chrome 주소창에 chrome://extensions 입력 후 이동\n" +
+            $"2. 우측 상단 '개발자 모드' 켜기\n" +
+            $"3. '압축해제된 확장 프로그램을 로드합니다' 클릭 후 위 폴더 선택";
+
+        if (owner != null && owner.IsLoaded)
+        {
+            System.Windows.MessageBox.Show(owner, guide, "WorkDot 크롬 확장프로그램 설치", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        else
+        {
+            System.Windows.MessageBox.Show(guide, "WorkDot 크롬 확장프로그램 설치", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
     }
 
     private async void OnRefreshClick(object sender, RoutedEventArgs e)

@@ -679,6 +679,44 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- 4.5. Chrome Extension Bridge Card -->
+                    <Border Style="{StaticResource ShadcnCardStyle}">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,6">
+                                <TextBlock Text="크롬 확장프로그램 연동"
+                                           FontFamily="{StaticResource SansFont}"
+                                           FontSize="13"
+                                           FontWeight="SemiBold"
+                                           Foreground="#FAFAFA"
+                                           VerticalAlignment="Center"/>
+                                <TextBlock x:Name="ExtensionStatusText"
+                                           Text="연결 대기 중"
+                                           FontFamily="{StaticResource SansFont}"
+                                           FontSize="11.5"
+                                           Foreground="#F59E0B"
+                                           DockPanel.Dock="Right"
+                                           HorizontalAlignment="Right"
+                                           VerticalAlignment="Center"/>
+                            </DockPanel>
+
+                            <TextBlock Text="기존 Chrome 로그인 세션을 그대로 공유하므로 중복 로그인·2차 인증 없이 동기화됩니다. chrome://extensions → 개발자 모드 → 압축해제된 확장 프로그램 로드에서 아래 폴더를 선택하세요."
+                                       FontFamily="{StaticResource SansFont}"
+                                       FontSize="11.5"
+                                       Foreground="#71717A"
+                                       TextWrapping="Wrap"
+                                       Margin="0,0,0,10"/>
+
+                            <Button x:Name="OpenExtensionFolderButton"
+                                    Style="{StaticResource ModernActionBtnStyle}"
+                                    Content="확장프로그램 폴더 열기 (경로 복사)"
+                                    Background="#18181B"
+                                    BorderBrush="#27272A"
+                                    Foreground="#FAFAFA"
+                                    Padding="10,8"
+                                    Click="OnOpenExtensionFolderClick"/>
+                        </StackPanel>
+                    </Border>
+
                     <!-- 5. Manual Update Check & Open Repository Buttons Only -->
                     <UniformGrid Columns="2" Margin="0">
                         <Button x:Name="CheckUpdateButton"

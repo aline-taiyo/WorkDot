@@ -13,14 +13,19 @@ public partial class SettingsWindow : Window
 {
     private readonly AppSettingsService _settingsService;
     private readonly AutoUpdateService _autoUpdateService;
+    private readonly DaouAttendanceService? _attendanceService;
     private readonly DispatcherTimer _feedbackResetTimer;
     private bool _isLoadingUi = true;
     private bool _isManualChecking;
 
-    public SettingsWindow(AppSettingsService settingsService, AutoUpdateService autoUpdateService)
+    public SettingsWindow(
+        AppSettingsService settingsService,
+        AutoUpdateService autoUpdateService,
+        DaouAttendanceService? attendanceService = null)
     {
         _settingsService = settingsService;
         _autoUpdateService = autoUpdateService;
+        _attendanceService = attendanceService;
         _isLoadingUi = true;
 
         InitializeComponent();
@@ -40,12 +45,21 @@ public partial class SettingsWindow : Window
         CheckUpdateButton.ToolTip = _autoUpdateService.LastStatusMessage;
 
         _autoUpdateService.StatusChanged += OnAutoUpdateStatusChanged;
+        if (_attendanceService != null)
+        {
+            _attendanceService.BridgeConnectionChanged += OnBridgeConnectionChanged;
+        }
         Closed += (_, _) =>
         {
             _feedbackResetTimer.Stop();
             _autoUpdateService.StatusChanged -= OnAutoUpdateStatusChanged;
+            if (_attendanceService != null)
+            {
+                _attendanceService.BridgeConnectionChanged -= OnBridgeConnectionChanged;
+            }
         };
 
+        UpdateExtensionConnectionVisual();
         PopulateFontFamilies();
         LoadSettingsIntoUi();
     }
@@ -460,6 +474,33 @@ public partial class SettingsWindow : Window
             _isManualChecking = false;
             CheckUpdateButton.IsEnabled = true;
         }
+    }
+
+    private void OnBridgeConnectionChanged(bool _)
+    {
+        Dispatcher.Invoke(UpdateExtensionConnectionVisual);
+    }
+
+    private void UpdateExtensionConnectionVisual()
+    {
+        if (ExtensionStatusText == null || _attendanceService == null)
+            return;
+
+        if (_attendanceService.IsExtensionConnected)
+        {
+            ExtensionStatusText.Text = $"연결됨 (포트 {_attendanceService.BridgePort})";
+            ExtensionStatusText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#10B981"));
+        }
+        else
+        {
+            ExtensionStatusText.Text = "연결 대기 중";
+            ExtensionStatusText.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F59E0B"));
+        }
+    }
+
+    private void OnOpenExtensionFolderClick(object sender, RoutedEventArgs e)
+    {
+        MainWindow.OpenExtensionInstallFolder(this);
     }
 
     private void OnOpenGitHubRepoClick(object sender, RoutedEventArgs e)

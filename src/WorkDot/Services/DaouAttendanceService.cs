@@ -1,11 +1,7 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
-using System.Windows;
-using Microsoft.Web.WebView2.Core;
-using Microsoft.Web.WebView2.Wpf;
 
 namespace WorkDot.Services;
 
@@ -45,7 +41,7 @@ public sealed record AttendanceSnapshot(
     public static string FormatClockTimeHm(string? rawTime)
     {
         if (!string.IsNullOrWhiteSpace(rawTime) &&
-            TimeSpan.TryParse(rawTime.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan ts))
+            TimeSpan.TryParse(rawTime.Trim(), CultureInfo.InvariantCulture, out TimeSpan ts))
         {
             return $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}";
         }
@@ -88,12 +84,12 @@ public sealed record AttendanceSnapshot(
         if (Status == WorkStatusKind.OffWork)
         {
             if (!string.IsNullOrWhiteSpace(ClockOutTimeText) &&
-                TimeSpan.TryParse(ClockOutTimeText.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan clockOutTod))
+                TimeSpan.TryParse(ClockOutTimeText.Trim(), CultureInfo.InvariantCulture, out TimeSpan clockOutTod))
             {
                 effectiveNow = now.Date.Add(clockOutTod);
             }
             else if (!string.IsNullOrWhiteSpace(WorkedDurationText) &&
-                     TimeSpan.TryParse(WorkedDurationText.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan offDur))
+                     TimeSpan.TryParse(WorkedDurationText.Trim(), CultureInfo.InvariantCulture, out TimeSpan offDur))
             {
                 return offDur;
             }
@@ -110,7 +106,7 @@ public sealed record AttendanceSnapshot(
         }
 
         if (!string.IsNullOrWhiteSpace(ClockInTimeText) &&
-            TimeSpan.TryParse(ClockInTimeText.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan clockInTod))
+            TimeSpan.TryParse(ClockInTimeText.Trim(), CultureInfo.InvariantCulture, out TimeSpan clockInTod))
         {
             DateTime start = effectiveNow.Date.Add(clockInTod);
             if (start > effectiveNow.AddMinutes(1))
@@ -151,7 +147,7 @@ public sealed record AttendanceSnapshot(
         }
 
         if (!string.IsNullOrWhiteSpace(WorkedDurationText) &&
-            TimeSpan.TryParse(WorkedDurationText.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan parsedDur))
+            TimeSpan.TryParse(WorkedDurationText.Trim(), CultureInfo.InvariantCulture, out TimeSpan parsedDur))
         {
             return parsedDur;
         }
@@ -229,42 +225,68 @@ public sealed record AttendanceSnapshot(
         (UserBreakWindows != null && UserBreakWindows.Count > 0);
 }
 
-internal sealed record SavedCookieItem(
-    string Name,
-    string Value,
-    string Domain,
-    string Path,
-    bool IsHttpOnly,
-    bool IsSecure,
-    CoreWebView2CookieSameSiteKind SameSite);
-
-internal sealed record SavedCredentials(
-    string Username,
-    string Password);
-
-public sealed class DaouAttendanceService
+/// <summary>
+/// 크롬 확장프로그램 로컬 브릿지(ChromeExtensionBridgeService)를 통해
+/// 사용자가 사용 중인 크롬 브라우저의 다우오피스 로그인 세션을 그대로 공유하여 근태 상태를 동기화하고 출퇴근 액션을 실행합니다.
+/// </summary>
+public sealed class DaouAttendanceService : IDisposable
 {
     public const string TargetAttendanceUrl = "https://alinestudio.daouoffice.com/ehr/app/attend/my-attendance-status";
     public const string BaseUrl = "https://alinestudio.daouoffice.com";
     public const string BaseDomain = "alinestudio.daouoffice.com";
 
-    private CoreWebView2Environment? _env;
-    private WebView2? _webView;
-    private bool _isInitialized;
+    private readonly ChromeExtensionBridgeService _bridge;
+
     private DateTime _lastKnownDate = DateTime.Today;
-    private DateTime _lastAutoLoginAttempt = DateTime.MinValue;
-    private bool _hasAttemptedAutoLoginInSession;
-    private bool _isUserActionLoginAllowed;
     private WorkStatusKind? _manualStatusOverride;
     private DateTime _manualOverrideDate;
     private DateTime? _activeBreakStartTime;
     private DateTime _userBreaksDate = DateTime.Today;
     private readonly List<BreakTimeWindow> _userBreakWindowsToday = new();
 
+    public bool IsExtensionConnected => _bridge.IsExtensionConnected;
+
+    public int BridgePort => _bridge.ActivePort;
+
+    public AttendanceSnapshot CurrentSnapshot { get; private set; } = new(
+        WorkStatusKind.Unknown,
+        "연결 대기",
+        "크롬 확장프로그램 연결 대기 중 (우클릭 → 크롬 확장 설치)",
+        null,
+        null,
+        null,
+        DateTime.Now);
+
+    public event Action<AttendanceSnapshot>? SnapshotChanged;
+    public event Action<bool>? BridgeConnectionChanged;
+
+    public string AppDataFolder =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WorkDot");
+
+    public string LastProbeLogPath =>
+        Path.Combine(AppDataFolder, "last-probe.json");
+
+    public DaouAttendanceService()
+    {
+        TryRestoreTodaySnapshotFromCache();
+
+        _bridge = new ChromeExtensionBridgeService();
+        _bridge.ProbeReceived += OnBridgeProbeReceived;
+        _bridge.ConnectionStateChanged += connected =>
+        {
+            BridgeConnectionChanged?.Invoke(connected);
+        };
+        _bridge.Start();
+    }
+
+    private void OnBridgeProbeReceived(string json)
+    {
+        ProcessWebMessageJson(json);
+    }
+
     /// <summary>
     /// 자정이 지나 날짜가 변경되었을 때(어제 -> 오늘) 어제의 출퇴근/휴게 상태를 로컬에서 깨끗이 리셋합니다.
-    /// 백그라운드에서 다우오피스 페이지 이동이나 로그인 시도는 절대 수행하지 않으며,
-    /// 실제 페이지 갱신 및 로그인 시도는 사용자가 출근 등 유저 액션을 실행할 때 수행합니다.
+    /// 백그라운드에서 별도 로그인 시도나 중복 로그인을 유발하지 않습니다.
     /// </summary>
     public void CheckDateRollover()
     {
@@ -291,1047 +313,130 @@ public sealed class DaouAttendanceService
         }
     }
 
-    // 로그인 직후 다우오피스가 홈(/app/home 등)으로 보내는 경우에만 근태 페이지로 1회 되돌리기 위한 플래그
-    private bool _pendingAttendanceRedirect = true;
-
-    /// <summary>
-    /// 사용자가 브라우저 창을 열어 직접 탐색 중인지 여부.
-    /// true 인 동안에는 자동으로 근태 페이지로 되돌리지 않는다 (로그인 직후 1회 제외).
-    /// </summary>
-    public bool IsInteractiveBrowsing { get; set; }
-
-    public AttendanceSnapshot CurrentSnapshot { get; private set; } = new(
-        WorkStatusKind.Unknown,
-        "확인 중...",
-        "다우오피스 로그인 및 근태 동기화 중",
-        null,
-        null,
-        null,
-        DateTime.Now);
-
-    public event Action<AttendanceSnapshot>? SnapshotChanged;
-
-    public DaouAttendanceService()
+    public async Task OpenPortalInBrowserAsync()
     {
+        if (_bridge.IsExtensionConnected)
+        {
+            var result = await _bridge.SendCommandAsync("OPEN_PORTAL", TimeSpan.FromSeconds(5));
+            if (result.Success)
+                return;
+        }
+
+        OpenDefaultBrowserUrl(TargetAttendanceUrl);
     }
 
-    private void TryRestoreTodaySnapshotFromCache()
+    public void OpenPortalInBrowser()
+    {
+        _ = OpenPortalInBrowserAsync();
+    }
+
+    public static void OpenDefaultBrowserUrl(string url)
     {
         try
         {
-            if (!File.Exists(LastProbeLogPath))
-                return;
-
-            DateTime lastWrite = File.GetLastWriteTime(LastProbeLogPath);
-            if (lastWrite.Date != DateTime.Today)
-                return;
-
-            string json = File.ReadAllText(LastProbeLogPath);
-            if (string.IsNullOrWhiteSpace(json))
-                return;
-
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            bool isLogin = root.TryGetProperty("isLoginPage", out var lp) && lp.GetBoolean();
-            if (isLogin)
-                return;
-
-            string state = root.TryGetProperty("state", out var sProp) ? (sProp.GetString() ?? "") : "";
-            string? clockIn = root.TryGetProperty("clockIn", out var inProp) ? inProp.GetString() : null;
-            string? clockOut = root.TryGetProperty("clockOut", out var outProp) ? outProp.GetString() : null;
-            string? duration = root.TryGetProperty("duration", out var durProp) ? durProp.GetString() : null;
-
-            if (state == "WORKING" && !string.IsNullOrWhiteSpace(clockIn))
-            {
-                CurrentSnapshot = new AttendanceSnapshot(
-                    WorkStatusKind.Working,
-                    "근무중",
-                    $"출근 {clockIn}" + (!string.IsNullOrWhiteSpace(duration) ? $" · {duration}" : ""),
-                    clockIn,
-                    clockOut,
-                    duration,
-                    DateTime.Now);
-            }
-            else if (state == "BREAK")
-            {
-                CurrentSnapshot = new AttendanceSnapshot(
-                    WorkStatusKind.Break,
-                    "휴게",
-                    "휴게중",
-                    clockIn,
-                    clockOut,
-                    duration,
-                    DateTime.Now);
-            }
-            else if (state == "OFF_WORK" && !string.IsNullOrWhiteSpace(clockOut))
-            {
-                CurrentSnapshot = new AttendanceSnapshot(
-                    WorkStatusKind.OffWork,
-                    "퇴근",
-                    $"퇴근 {clockOut}",
-                    clockIn,
-                    clockOut,
-                    duration,
-                    DateTime.Now);
-            }
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
         }
         catch
         {
-            // Ignore cache restore errors
+            // Ignore browser launch errors
         }
-    }
-
-    private string? GetCachedClockInToday()
-    {
-        try
-        {
-            if (File.Exists(LastProbeLogPath) && File.GetLastWriteTime(LastProbeLogPath).Date == DateTime.Today)
-            {
-                string json = File.ReadAllText(LastProbeLogPath);
-                using var doc = JsonDocument.Parse(json);
-                if (doc.RootElement.TryGetProperty("clockIn", out var inProp))
-                {
-                    string? cin = inProp.GetString();
-                    if (!string.IsNullOrWhiteSpace(cin))
-                        return cin;
-                }
-            }
-        }
-        catch
-        {
-            // Ignore
-        }
-        return null;
-    }
-
-    public string AppDataFolder =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WorkDot");
-
-    public string UserDataFolder =>
-        Path.Combine(AppDataFolder, "WebView2Profile");
-
-    public string LastProbeLogPath =>
-        Path.Combine(AppDataFolder, "last-probe.json");
-
-    private string SavedCookiesFilePath =>
-        Path.Combine(AppDataFolder, "session-cookies.dat");
-
-    private string SavedCredentialsFilePath =>
-        Path.Combine(AppDataFolder, "auth-credentials.dat");
-
-    /// <summary>
-    /// WebView2 렌더러/GPU/브라우저 프로세스 사망 또는 장기 유휴 후 검은 화면 복구를 위해
-    /// 호스트 창(AttendanceWebWindow)에서 새 WebView2 컨트롤로 교체·재초기화하는 콜백입니다.
-    /// </summary>
-    public Func<string?, Task>? RebuildWebViewHandler { get; set; }
-
-    public async Task<CoreWebView2Environment> GetOrCreateEnvironmentAsync()
-    {
-        if (_env != null)
-            return _env;
-
-        Directory.CreateDirectory(UserDataFolder);
-        var env = await CoreWebView2Environment.CreateAsync(null, UserDataFolder);
-        env.BrowserProcessExited += (_, _) =>
-        {
-            if (ReferenceEquals(_env, env))
-            {
-                _env = null;
-            }
-        };
-        _env = env;
-        return _env;
-    }
-
-    public async Task InitializeWebViewAsync(WebView2 webView, bool forceReinitialize = false, string? initialUrl = null)
-    {
-        if (_isInitialized && !forceReinitialize && ReferenceEquals(_webView, webView) && _webView?.CoreWebView2 != null)
-            return;
-
-        _webView = webView;
-        var env = await GetOrCreateEnvironmentAsync();
-        try
-        {
-            await _webView.EnsureCoreWebView2Async(env);
-        }
-        catch
-        {
-            // 장시간 유휴 후 브라우저 프로세스 종료 또는 WebView2 런타임 자동 업데이트로 기존 Environment가 무효화된 경우 재생성
-            _env = null;
-            env = await GetOrCreateEnvironmentAsync();
-            await _webView.EnsureCoreWebView2Async(env);
-        }
-
-        // 1. 저장된 다우오피스 세션 쿠키(GOSSOcookie 등)를 먼저 복원하여 재로그인 방지
-        await RestoreSessionCookiesAsync(_webView.CoreWebView2);
-
-        // 2. 실시간 API/DOM 훅 및 자동 로그인 캡처 장착
-        await AttachWebViewHooksAsync(_webView.CoreWebView2);
-
-        _isInitialized = true;
-        string target = !string.IsNullOrWhiteSpace(initialUrl) ? initialUrl : TargetAttendanceUrl;
-        _webView.Source = new Uri(target);
-    }
-
-    private async Task AttachWebViewHooksAsync(CoreWebView2 coreWebView)
-    {
-        await coreWebView.AddScriptToExecuteOnDocumentCreatedAsync(GetDocumentCreatedHookScript());
-
-        coreWebView.WebMessageReceived += (_, e) =>
-        {
-            try
-            {
-                string? json = e.TryGetWebMessageAsString();
-                if (!string.IsNullOrWhiteSpace(json))
-                {
-                    ProcessWebMessageJson(json);
-                }
-            }
-            catch
-            {
-                // Ignore malformed messages
-            }
-        };
-
-        coreWebView.ProcessFailed += async (_, args) =>
-        {
-            try
-            {
-                if (args.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
-                {
-                    _env = null;
-                }
-
-                string? lastUrl = null;
-                try { lastUrl = coreWebView.Source; } catch { }
-
-                await Task.Delay(300);
-
-                // 렌더/GPU/브라우저 프로세스 실패 시 컨트롤 자체를 새로 교체하여 검은 화면(합성 표면 유실) 완전 복구
-                if (RebuildWebViewHandler != null && System.Windows.Application.Current?.Dispatcher != null)
-                {
-                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(async () =>
-                    {
-                        await RebuildWebViewHandler(lastUrl);
-                    });
-                }
-                else
-                {
-                    coreWebView.Reload();
-                }
-            }
-            catch
-            {
-                // Ignore secondary recovery exceptions
-            }
-        };
-
-        coreWebView.NewWindowRequested += async (_, e) =>
-        {
-            string targetUri = e.Uri ?? string.Empty;
-
-            // 1. 백그라운드 동기화 중일 때는 팝업을 차단한다
-            if (!IsInteractiveBrowsing)
-            {
-                e.Handled = true;
-                return;
-            }
-
-            // 2. 외부 도메인 링크는 사용자의 기본 웹 브라우저(Edge, Chrome 등)로 전달
-            if (!string.IsNullOrWhiteSpace(targetUri) &&
-                !targetUri.Contains(BaseDomain, StringComparison.OrdinalIgnoreCase) &&
-                !targetUri.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
-            {
-                e.Handled = true;
-                try
-                {
-                    Process.Start(new ProcessStartInfo(targetUri) { UseShellExecute = true });
-                }
-                catch { }
-                return;
-            }
-
-            // 3. 다우오피스 팝업(초과근로 신청서, 결재선 지정, 결재문서 보기 등)은
-            //    부모 창을 덮어쓰지 않고 독립 보조 윈도우로 열어 window.opener 및 상호작용을 정상 보장한다.
-            var deferral = e.GetDeferral();
-            try
-            {
-                var popupWin = new Window
-                {
-                    Title = "다우오피스",
-                    Width = 1000,
-                    Height = 760,
-                    WindowStartupLocation = WindowStartupLocation.CenterScreen,
-                    Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(9, 9, 11))
-                };
-
-                var popupWebView = new WebView2();
-                popupWin.Content = popupWebView;
-                popupWin.Show();
-
-                var env = await GetOrCreateEnvironmentAsync();
-                await popupWebView.EnsureCoreWebView2Async(env);
-
-                // 팝업 내부에서 window.close() 호출 시 창 닫기
-                popupWebView.CoreWebView2.WindowCloseRequested += (_, _) =>
-                {
-                    popupWin.Close();
-                };
-
-                popupWin.Closed += (_, _) =>
-                {
-                    try { popupWebView.Dispose(); } catch { }
-                };
-
-                e.NewWindow = popupWebView.CoreWebView2;
-                e.Handled = true;
-            }
-            catch
-            {
-                e.Handled = true;
-                if (!string.IsNullOrWhiteSpace(targetUri) && !targetUri.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
-                {
-                    coreWebView.Navigate(targetUri);
-                }
-            }
-            finally
-            {
-                deferral.Complete();
-            }
-        };
-
-        coreWebView.DownloadStarting += (_, e) =>
-        {
-            // 백그라운드 동기화 중에만 불필요한 자동 다운로드를 차단하고,
-            // 사용자가 브라우저를 직접 쓸 때는 결재 첨부파일 등의 다운로드를 허용한다.
-            if (!IsInteractiveBrowsing)
-            {
-                e.Cancel = true;
-            }
-        };
-
-        coreWebView.ScriptDialogOpening += (_, args) =>
-        {
-            // 백그라운드 동기화 중일 때만 다이얼로그(alert/confirm)로 인해 웹뷰가 멈추지 않도록 자동 수락.
-            // 사용자가 브라우저 창을 직접 보고 있을 때는 가로채지 않아 결재 상신 confirm 및 alert 등이 정상 작동하도록 한다.
-            if (!IsInteractiveBrowsing)
-            {
-                args.Accept();
-            }
-        };
-
-        coreWebView.SourceChanged += async (_, _) =>
-        {
-            string current = coreWebView.Source ?? string.Empty;
-            if (IsLoginUrl(current))
-            {
-                _pendingAttendanceRedirect = true;
-                UpdateSnapshot(new AttendanceSnapshot(
-                    WorkStatusKind.NeedsLogin,
-                    "로그인 필요",
-                    "클릭하여 다우오피스 로그인 / 2차 인증 완료",
-                    null,
-                    null,
-                    null,
-                    DateTime.Now));
-                return;
-            }
-
-            if (ShouldReturnToAttendance(current))
-            {
-                _pendingAttendanceRedirect = false;
-                await Task.Delay(250);
-                coreWebView.Navigate(TargetAttendanceUrl);
-            }
-        };
-
-        coreWebView.NavigationCompleted += async (_, _) =>
-        {
-            string url = coreWebView.Source ?? string.Empty;
-            if (IsLoginUrl(url))
-            {
-                UpdateSnapshot(new AttendanceSnapshot(
-                    WorkStatusKind.NeedsLogin,
-                    "로그인 필요",
-                    "클릭하여 다우오피스 로그인 / 2차 인증 완료",
-                    null,
-                    null,
-                    null,
-                    DateTime.Now));
-
-                // 백그라운드에서는 절대 자동 로그인을 시도하지 않는다.
-                // 오직 출근 버튼 클릭, 창 열기 등 명시적 유저 액션(_isUserActionLoginAllowed)이 있을 때만 1회 시도한다.
-                if (_isUserActionLoginAllowed && !_hasAttemptedAutoLoginInSession)
-                {
-                    await TryAutoLoginIfPossibleAsync(coreWebView, isUserAction: true);
-                }
-                return;
-            }
-
-            // 로그인 성공 상태이므로 자동 로그인 시도 플래그 초기화 및 세션 쿠키(GOSSOcookie 등) 영구 승격·백업 저장
-            _hasAttemptedAutoLoginInSession = false;
-            _isUserActionLoginAllowed = false;
-            await PersistSessionCookiesAsync(coreWebView);
-
-            if (ShouldReturnToAttendance(url))
-            {
-                _pendingAttendanceRedirect = false;
-                coreWebView.Navigate(TargetAttendanceUrl);
-                return;
-            }
-
-            // 로그인 후 첫 페이지 로드가 끝났으므로 이후의 이동은 사용자 탐색으로 본다
-            _pendingAttendanceRedirect = false;
-
-            int[] delays = [500, 1000, 1500];
-            foreach (int delay in delays)
-            {
-                await Task.Delay(delay);
-                await ProbeDomAndApiStatusAsync(coreWebView);
-            }
-        };
-
-        coreWebView.WebResourceResponseReceived += async (_, e) =>
-        {
-            try
-            {
-                string uri = e.Request.Uri;
-                if (!uri.Contains("/api/ehr", StringComparison.OrdinalIgnoreCase) &&
-                    !uri.Contains("timeline", StringComparison.OrdinalIgnoreCase) &&
-                    !uri.Contains("attend", StringComparison.OrdinalIgnoreCase))
-                {
-                    return;
-                }
-
-                if (e.Response.StatusCode == 401 || e.Response.StatusCode == 403)
-                {
-                    UpdateSnapshot(new AttendanceSnapshot(
-                        WorkStatusKind.NeedsLogin,
-                        "퇴근 · 로그인 필요",
-                        "세션 만료됨 · 재로그인 중",
-                        null,
-                        null,
-                        null,
-                        DateTime.Now));
-                    return;
-                }
-
-                await Task.Delay(350);
-                await ProbeDomAndApiStatusAsync(coreWebView);
-            }
-            catch
-            {
-                // Ignore
-            }
-        };
-    }
-
-    /// <summary>
-    /// 다우오피스 세션 쿠키(GOSSOcookie 등)가 앱 종료 시 삭제되지 않도록
-    /// 만료일을 30일 뒤로 연장하고 DPAPI 암호화 파일로 백업합니다.
-    /// </summary>
-    public async Task PersistSessionCookiesAsync(CoreWebView2 coreWebView)
-    {
-        try
-        {
-            var cookies = await coreWebView.CookieManager.GetCookiesAsync(BaseUrl);
-            if (cookies == null || cookies.Count == 0)
-                return;
-
-            var savedList = new List<SavedCookieItem>();
-            DateTime expiresAt = DateTime.UtcNow.AddDays(30);
-
-            foreach (var c in cookies)
-            {
-                if (string.IsNullOrWhiteSpace(c.Name) || string.IsNullOrWhiteSpace(c.Value))
-                    continue;
-
-                savedList.Add(new SavedCookieItem(
-                    c.Name,
-                    c.Value,
-                    c.Domain,
-                    c.Path,
-                    c.IsHttpOnly,
-                    c.IsSecure,
-                    c.SameSite));
-
-                // 세션 전용 쿠키(앱 종료 시 증발하는 쿠키)를 30일 영구 쿠키로 승격
-                if (c.IsSession)
-                {
-                    var persistentCookie = coreWebView.CookieManager.CreateCookie(c.Name, c.Value, c.Domain, c.Path);
-                    persistentCookie.IsHttpOnly = c.IsHttpOnly;
-                    persistentCookie.IsSecure = c.IsSecure;
-                    persistentCookie.SameSite = c.SameSite;
-                    persistentCookie.Expires = expiresAt;
-                    coreWebView.CookieManager.AddOrUpdateCookie(persistentCookie);
-                }
-            }
-
-            if (savedList.Count > 0)
-            {
-                string json = JsonSerializer.Serialize(savedList);
-                byte[] encrypted = ProtectedData.Protect(
-                    Encoding.UTF8.GetBytes(json),
-                    null,
-                    DataProtectionScope.CurrentUser);
-                Directory.CreateDirectory(AppDataFolder);
-                await File.WriteAllBytesAsync(SavedCookiesFilePath, encrypted);
-            }
-        }
-        catch
-        {
-            // Ignore cookie persistence errors
-        }
-    }
-
-    private async Task RestoreSessionCookiesAsync(CoreWebView2 coreWebView)
-    {
-        try
-        {
-            if (!File.Exists(SavedCookiesFilePath))
-                return;
-
-            byte[] encrypted = await File.ReadAllBytesAsync(SavedCookiesFilePath);
-            byte[] decrypted = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
-            string json = Encoding.UTF8.GetString(decrypted);
-
-            var savedList = JsonSerializer.Deserialize<List<SavedCookieItem>>(json);
-            if (savedList == null || savedList.Count == 0)
-                return;
-
-            DateTime expiresAt = DateTime.UtcNow.AddDays(30);
-            foreach (var item in savedList)
-            {
-                var cookie = coreWebView.CookieManager.CreateCookie(item.Name, item.Value, item.Domain, item.Path);
-                cookie.IsHttpOnly = item.IsHttpOnly;
-                cookie.IsSecure = item.IsSecure;
-                cookie.SameSite = item.SameSite;
-                cookie.Expires = expiresAt;
-                coreWebView.CookieManager.AddOrUpdateCookie(cookie);
-            }
-        }
-        catch
-        {
-            // Ignore corrupted cookie cache
-        }
-    }
-
-    private void SaveCredentials(string username, string password)
-    {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
-                return;
-
-            var creds = new SavedCredentials(username.Trim(), password);
-            string json = JsonSerializer.Serialize(creds);
-            byte[] encrypted = ProtectedData.Protect(
-                Encoding.UTF8.GetBytes(json),
-                null,
-                DataProtectionScope.CurrentUser);
-            Directory.CreateDirectory(AppDataFolder);
-            File.WriteAllBytes(SavedCredentialsFilePath, encrypted);
-        }
-        catch
-        {
-            // Ignore
-        }
-    }
-
-    private SavedCredentials? LoadCredentials()
-    {
-        try
-        {
-            if (!File.Exists(SavedCredentialsFilePath))
-                return null;
-
-            byte[] encrypted = File.ReadAllBytes(SavedCredentialsFilePath);
-            byte[] decrypted = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
-            string json = Encoding.UTF8.GetString(decrypted);
-            return JsonSerializer.Deserialize<SavedCredentials>(json);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// 사용자가 브라우저 창을 직접 열었을 때(유저 액션) 현재 로그인 화면에 대기 중이면
-    /// 저장된 자격증명으로 1차 로그인을 1회 보조 수행합니다.
-    /// </summary>
-    public async Task OnPortalShownInteractiveAsync()
-    {
-        if (_webView?.CoreWebView2 == null)
-            return;
-
-        _isUserActionLoginAllowed = true;
-        string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
-        if (IsLoginUrl(currentUrl) && !_hasAttemptedAutoLoginInSession)
-        {
-            await TryAutoLoginIfPossibleAsync(_webView.CoreWebView2, isUserAction: true);
-        }
-    }
-
-    /// <summary>
-    /// 출근/퇴근/휴게/창 열기 등 명시적인 유저 액션이 발생했을 때만
-    /// 저장된 계정 정보로 1회 자동 입력·로그인을 시도합니다.
-    /// 백그라운드 타이머나 자동 리다이렉트에서는 절대 로그인 시도를 하지 않습니다.
-    /// </summary>
-    private async Task<bool> TryAutoLoginIfPossibleAsync(CoreWebView2 coreWebView, bool isUserAction)
-    {
-        if (!isUserAction || !_isUserActionLoginAllowed || _hasAttemptedAutoLoginInSession)
-            return false;
-
-        if ((DateTime.Now - _lastAutoLoginAttempt).TotalSeconds < 25)
-            return false;
-
-        var creds = LoadCredentials();
-        if (creds == null || string.IsNullOrWhiteSpace(creds.Username) || string.IsNullOrWhiteSpace(creds.Password))
-            return false;
-
-        _lastAutoLoginAttempt = DateTime.Now;
-        _hasAttemptedAutoLoginInSession = true;
-
-        UpdateSnapshot(new AttendanceSnapshot(
-            CurrentSnapshot.Status,
-            "자동 로그인 중...",
-            "저장된 세션으로 다우오피스 연결 중",
-            CurrentSnapshot.ClockInTimeText,
-            CurrentSnapshot.ClockOutTimeText,
-            CurrentSnapshot.WorkedDurationText,
-            DateTime.Now));
-
-        await Task.Delay(600);
-
-        string userJson = JsonSerializer.Serialize(creds.Username);
-        string passJson = JsonSerializer.Serialize(creds.Password);
-
-        string autoLoginScript = $$"""
-            (() => {
-                const username = {{userJson}};
-                const password = {{passJson}};
-
-                const hasOtpOrAuthInput = Boolean(document.querySelector(
-                    'input[name*="otp" i], input[id*="otp" i], input[name*="authCode" i], input[id*="authCode" i], input[name*="cert" i], input[id*="cert" i], input[autocomplete="one-time-code"], input[placeholder*="인증" i], input[placeholder*="OTP" i]'
-                ));
-                if (hasOtpOrAuthInput) return 'OTP_REQUIRED';
-
-                const passInput = document.querySelector('input[type="password"], #password, input[name="password"]');
-                if (!passInput) return 'NO_FORM';
-
-                const userInput = document.querySelector('#username, #userId, #loginId, input[name="username"], input[name="userId"], input[type="text"], input[type="email"]');
-                if (!userInput) return 'NO_USER_INPUT';
-
-                const setNativeValue = (el, val) => {
-                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                    if (setter) setter.call(el, val);
-                    else el.value = val;
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                };
-
-                setNativeValue(userInput, username);
-                setNativeValue(passInput, password);
-
-                const loginBtn = document.querySelector('#login_submit, #btnLogin, .btn_login, button[type="submit"], input[type="submit"], a.btn_login');
-                if (loginBtn) {
-                    loginBtn.click();
-                    return 'SUBMITTED';
-                }
-
-                // 텍스트가 '로그인'인 버튼/링크 탐색
-                const candidates = Array.from(document.querySelectorAll('button, a, span, div[role="button"]'));
-                for (const c of candidates) {
-                    if ((c.innerText || '').trim() === '로그인') {
-                        c.click();
-                        return 'SUBMITTED_TEXT';
-                    }
-                }
-
-                const form = passInput.closest('form');
-                if (form) {
-                    form.submit();
-                    return 'FORM_SUBMITTED';
-                }
-                return 'NO_BTN';
-            })();
-            """;
-
-        try
-        {
-            string raw = await coreWebView.ExecuteScriptAsync(autoLoginScript);
-            string res = JsonSerializer.Deserialize<string>(raw) ?? "";
-            return res.StartsWith("SUBMITTED", StringComparison.Ordinal) || res == "FORM_SUBMITTED";
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    public static bool IsAttendanceCapableUrl(string url)
-    {
-        if (string.IsNullOrWhiteSpace(url) || IsLoginUrl(url))
-            return false;
-
-        return url.Contains("/ehr/", StringComparison.OrdinalIgnoreCase) ||
-               url.Contains("/home", StringComparison.OrdinalIgnoreCase);
-    }
-
-    public static bool IsBlockingSurveyOrPopupUrl(string url)
-    {
-        if (string.IsNullOrWhiteSpace(url))
-            return true;
-
-        return url.Contains("/survey", StringComparison.OrdinalIgnoreCase) ||
-               url.Contains("popup", StringComparison.OrdinalIgnoreCase) ||
-               url.Contains("/notice", StringComparison.OrdinalIgnoreCase);
-    }
-
-    public static bool IsRedirectedAwayFromAttendanceAfterLogin(string url)
-    {
-        if (string.IsNullOrWhiteSpace(url))
-            return false;
-
-        if (IsLoginUrl(url))
-            return false;
-
-        if (url.Contains("/ehr/", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        if (url.Contains("/app/survey", StringComparison.OrdinalIgnoreCase) ||
-            url.Contains("/app/home", StringComparison.OrdinalIgnoreCase) ||
-            url.Contains("/app/board", StringComparison.OrdinalIgnoreCase) ||
-            url.EndsWith(".com/", StringComparison.OrdinalIgnoreCase) ||
-            url.EndsWith("/app", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// 근태 페이지로 자동 복귀할지 판단한다.
-    /// 백그라운드 동기화 중이거나 로그인 직후 홈으로 보내진 경우에만 복귀하고,
-    /// 사용자가 브라우저 창에서 다른 메뉴로 이동한 경우에는 그대로 둔다.
-    /// </summary>
-    private bool ShouldReturnToAttendance(string url)
-    {
-        if (!IsRedirectedAwayFromAttendanceAfterLogin(url))
-            return false;
-
-        return _pendingAttendanceRedirect || !IsInteractiveBrowsing;
-    }
-
-    public async Task<int> DismissBlockingPopupsAndSurveysAsync(CoreWebView2 webView)
-    {
-        try
-        {
-            string raw = await webView.ExecuteScriptAsync(GetDismissPopupsScript());
-            if (int.TryParse(raw, out int closedCount))
-                return closedCount;
-        }
-        catch
-        {
-            // Ignore script errors
-        }
-        return 0;
     }
 
     public async Task RefreshStatusAsync(bool isUserAction = false)
     {
         CheckDateRollover();
+        _bridge.CheckConnectionTimeout();
 
-        if (_webView?.CoreWebView2 == null)
-            return;
-
-        if (!isUserAction)
+        if (_bridge.IsExtensionConnected)
         {
-            // 백그라운드 주기 폴링: 페이지 강제 이동(Navigate)이나 로그인 시도를 절대 하지 않는다.
-            string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
-            if (IsLoginUrl(currentUrl) || CurrentSnapshot.Status == WorkStatusKind.NeedsLogin)
-                return;
-
-            if (!IsAttendanceCapableUrl(currentUrl))
-                return;
-
-            await PersistSessionCookiesAsync(_webView.CoreWebView2);
-            await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
+            if (isUserAction)
+            {
+                await _bridge.SendCommandAsync("REFRESH", TimeSpan.FromSeconds(12));
+            }
+            else
+            {
+                _bridge.EnqueueFireAndForget("REFRESH");
+            }
             return;
         }
 
-        // 사용자가 직접 새로고침 등 유저 액션을 실행한 경우에만 페이지 갱신 및 로그인 시도 허용
-        bool ready = await EnsureFreshAttendancePageForUserActionAsync();
-        if (!ready)
-            return;
-
-        await PersistSessionCookiesAsync(_webView.CoreWebView2);
-        await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
-    }
-
-    /// <summary>
-    /// 출근/퇴근/휴게/새로고침 등 명시적 유저 액션 시점에 호출되어,
-    /// 페이지가 오래되었거나 로그인 화면에 있으면 근태 페이지로 이동 및 1차 자동 로그인을 시도합니다.
-    /// </summary>
-    private async Task<bool> EnsureFreshAttendancePageForUserActionAsync()
-    {
-        _isUserActionLoginAllowed = true;
-
-        // 장시간 유휴 후 백그라운드 WebView2 프로세스가 죽었거나 응답이 없는 경우 새 WebView2 컨트롤로 재구축
-        bool isWebViewAlive = false;
-        if (_webView?.CoreWebView2 != null)
+        if (CurrentSnapshot.Status == WorkStatusKind.Unknown)
         {
-            try
-            {
-                var pingTask = _webView.CoreWebView2.ExecuteScriptAsync("1");
-                if (await Task.WhenAny(pingTask, Task.Delay(700)) == pingTask)
-                {
-                    await pingTask;
-                    isWebViewAlive = true;
-                }
-            }
-            catch
-            {
-                isWebViewAlive = false;
-            }
+            UpdateSnapshot(new AttendanceSnapshot(
+                WorkStatusKind.Unknown,
+                "연결 대기",
+                "크롬 확장프로그램 연결 대기 중 (우클릭 → 크롬 확장 설치)",
+                null,
+                null,
+                null,
+                DateTime.Now));
         }
-
-        if (!isWebViewAlive && RebuildWebViewHandler != null)
-        {
-            await RebuildWebViewHandler(TargetAttendanceUrl);
-            await Task.Delay(1800);
-        }
-
-        if (_webView?.CoreWebView2 == null)
-            return false;
-
-        string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
-        bool needsNavigation = IsLoginUrl(currentUrl) || !IsAttendanceCapableUrl(currentUrl);
-
-        if (!needsNavigation)
-        {
-            try
-            {
-                string rawProbe = await _webView.CoreWebView2.ExecuteScriptAsync(GetAttendanceProbeScript());
-                string? innerJson = JsonSerializer.Deserialize<string>(rawProbe);
-                if (!string.IsNullOrWhiteSpace(innerJson))
-                {
-                    using var doc = JsonDocument.Parse(innerJson);
-                    var root = doc.RootElement;
-                    if (root.TryGetProperty("isLoginPage", out var lp) && lp.GetBoolean())
-                    {
-                        needsNavigation = true;
-                    }
-                    else if (root.TryGetProperty("state", out var st) && st.GetString() == "PAGE_OUTDATED_NEEDS_RELOAD")
-                    {
-                        needsNavigation = true;
-                    }
-                }
-            }
-            catch
-            {
-                needsNavigation = true;
-            }
-        }
-
-        if (needsNavigation)
-        {
-            _webView.CoreWebView2.Navigate(TargetAttendanceUrl);
-            await Task.Delay(1800);
-        }
-
-        currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
-        if (IsLoginUrl(currentUrl))
-        {
-            if (!_hasAttemptedAutoLoginInSession)
-            {
-                bool submitted = await TryAutoLoginIfPossibleAsync(_webView.CoreWebView2, isUserAction: true);
-                if (submitted)
-                {
-                    await Task.Delay(1800);
-                    currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
-                }
-            }
-
-            if (IsLoginUrl(currentUrl))
-            {
-                ClearManualStatusOverride();
-                UpdateSnapshot(new AttendanceSnapshot(
-                    WorkStatusKind.NeedsLogin,
-                    "로그인 필요",
-                    "클릭하여 다우오피스 로그인 / 2차 인증 완료",
-                    null,
-                    null,
-                    null,
-                    DateTime.Now));
-                return false;
-            }
-        }
-
-        return true;
     }
 
     public async Task<(bool Success, string Message)> TriggerClockActionAsync(bool clockIn)
     {
         CheckDateRollover();
 
-        // 다우오피스 근태 페이지에서 업무 상태로 전환 가능한 경우(퇴근 -> 업무) -> 업무 복귀 실행
         if (clockIn && CurrentSnapshot.IsResumeWorkAvailable)
         {
             return await TriggerResumeWorkActionAsync();
         }
 
-        if (_webView?.CoreWebView2 == null)
-            return (false, "WebView2가 아직 초기화되지 않았습니다.");
-
-        if (!await EnsureFreshAttendancePageForUserActionAsync())
-        {
-            return (false, "그룹웨어 로그인이 필요합니다. 로그인 창을 열어주세요.");
-        }
-
-        string script = clockIn ? GetClockInTriggerScript() : GetClockOutTriggerScript();
-
-        try
-        {
-            await DismissBlockingPopupsAndSurveysAsync(_webView.CoreWebView2);
-            string rawResult = await _webView.CoreWebView2.ExecuteScriptAsync(script);
-            string result = JsonSerializer.Deserialize<string>(rawResult) ?? "UNKNOWN";
-
-            if (result.StartsWith("OK:", StringComparison.Ordinal))
-            {
-                await Task.Delay(600);
-                string modalRaw = await _webView.CoreWebView2.ExecuteScriptAsync(GetConfirmModalClickScript());
-                string modalRes = JsonSerializer.Deserialize<string>(modalRaw) ?? "NO_MODAL";
-                if (modalRes.StartsWith("NEEDS_USER_INPUT", StringComparison.Ordinal))
-                {
-                    return (false, "다우오피스 추가 확인(근무지 선택 등)이 필요합니다.");
-                }
-
-                await Task.Delay(1000);
-                await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
-
-                return (true, clockIn ? "출근 처리가 완료되었습니다." : "퇴근 처리가 완료되었습니다.");
-            }
-
-            if (result.StartsWith("DISABLED:", StringComparison.Ordinal))
-            {
-                await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
-                return (true, clockIn ? "이미 출근 처리되어 있습니다." : "이미 퇴근 처리되어 있습니다.");
-            }
-
-            return (false, $"다우오피스 페이지에서 {(clockIn ? "출근" : "퇴근")} 버튼을 찾지 못했습니다 ({result}). 그룹웨어 창에서 직접 확인해주세요.");
-        }
-        catch (Exception ex)
-        {
-            return (false, $"처리 중 오류: {ex.Message}");
-        }
+        return await ExecuteBridgeActionAsync(
+            clockIn ? "CLOCK_IN" : "CLOCK_OUT",
+            clockIn ? "출근 처리가 완료되었습니다." : "퇴근 처리가 완료되었습니다.");
     }
 
     /// <summary>
     /// 오늘 이미 출근 후 퇴근한 상태에서 다시 업무를 시작할 때,
-    /// 비활성화된 출근 버튼 대신 다우오피스의 '근무상태변경' -> '업무' 메뉴를 트리거합니다.
+    /// 크롬의 다우오피스 탭에서 '근무상태변경' -> '업무' 메뉴를 트리거합니다.
     /// </summary>
     public async Task<(bool Success, string Message)> TriggerResumeWorkActionAsync()
     {
         CheckDateRollover();
-
-        if (_webView?.CoreWebView2 == null)
-            return (false, "WebView2가 아직 초기화되지 않았습니다.");
-
-        if (!await EnsureFreshAttendancePageForUserActionAsync())
-        {
-            return (false, "그룹웨어 로그인이 필요합니다. 로그인 창을 열어주세요.");
-        }
-
-        try
-        {
-            await DismissBlockingPopupsAndSurveysAsync(_webView.CoreWebView2);
-            string rawResult = await _webView.CoreWebView2.ExecuteScriptAsync(GetResumeWorkTriggerScript());
-            string result = JsonSerializer.Deserialize<string>(rawResult) ?? "UNKNOWN";
-
-            if (result.StartsWith("OK:", StringComparison.Ordinal))
-            {
-                await Task.Delay(600);
-                string modalRaw = await _webView.CoreWebView2.ExecuteScriptAsync(GetConfirmModalClickScript());
-                string modalRes = JsonSerializer.Deserialize<string>(modalRaw) ?? "NO_MODAL";
-                if (modalRes.StartsWith("NEEDS_USER_INPUT", StringComparison.Ordinal))
-                {
-                    return (false, "다우오피스 추가 확인(근무지 선택 등)이 필요합니다.");
-                }
-
-                // 모달 승인 후 후속 완료 alert 또는 2차 팝업이 뜰 수 있으므로 500ms 후 한 번 더 확인 시도
-                await Task.Delay(500);
-                await _webView.CoreWebView2.ExecuteScriptAsync(GetConfirmModalClickScript());
-
-                await Task.Delay(1000);
-                await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
-
-                return (true, "업무 상태로 전환되었습니다.");
-            }
-
-            if (result.StartsWith("ALREADY_WORKING", StringComparison.Ordinal))
-            {
-                await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
-                return (true, "이미 업무(근무중) 상태입니다.");
-            }
-
-            if (result.StartsWith("DISABLED:", StringComparison.Ordinal))
-            {
-                await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
-                return (true, "업무 상태로 전환할 수 없는 상태입니다.");
-            }
-
-            return (false, $"다우오피스에서 업무 상태 변경 메뉴를 찾지 못했습니다 ({result}). 그룹웨어 창에서 직접 확인해주세요.");
-        }
-        catch (Exception ex)
-        {
-            return (false, $"처리 중 오류: {ex.Message}");
-        }
+        return await ExecuteBridgeActionAsync("RESUME_WORK", "업무 상태로 전환되었습니다.");
     }
 
     public async Task<(bool Success, string Message)> TriggerBreakActionAsync(bool toBreak)
     {
-        if (_webView?.CoreWebView2 == null)
-            return (false, "WebView2가 아직 초기화되지 않았습니다.");
+        CheckDateRollover();
+        return await ExecuteBridgeActionAsync(
+            toBreak ? "BREAK_IN" : "BREAK_OUT",
+            toBreak ? "휴게 상태로 전환되었습니다." : "근무중 상태로 전환되었습니다.");
+    }
 
-        if (!await EnsureFreshAttendancePageForUserActionAsync())
+    private async Task<(bool Success, string Message)> ExecuteBridgeActionAsync(string action, string successMessage)
+    {
+        if (!_bridge.IsExtensionConnected)
         {
-            return (false, "그룹웨어 로그인이 필요합니다. 로그인 창을 열어주세요.");
+            ClearManualStatusOverride();
+            OpenDefaultBrowserUrl(TargetAttendanceUrl);
+            return (false, "크롬 확장프로그램이 연결되지 않아 브라우저에서 다우오피스를 열었습니다. 확장프로그램을 설치·연결해주세요.");
         }
 
-        string script = toBreak ? GetBreakInTriggerScript() : GetBreakOutTriggerScript();
-
-        try
+        BridgeCommandResult res = await _bridge.SendCommandAsync(action, TimeSpan.FromSeconds(22));
+        if (res.Success)
         {
-            await DismissBlockingPopupsAndSurveysAsync(_webView.CoreWebView2);
-            string rawResult = await _webView.CoreWebView2.ExecuteScriptAsync(script);
-            string result = JsonSerializer.Deserialize<string>(rawResult) ?? "UNKNOWN";
-
-            if (result.StartsWith("OK:", StringComparison.Ordinal) || result.StartsWith("ALREADY_", StringComparison.Ordinal))
-            {
-                await Task.Delay(500);
-                string modalRaw = await _webView.CoreWebView2.ExecuteScriptAsync(GetConfirmModalClickScript());
-                string modalRes = JsonSerializer.Deserialize<string>(modalRaw) ?? "NO_MODAL";
-                if (modalRes.StartsWith("NEEDS_USER_INPUT", StringComparison.Ordinal))
-                {
-                    return (false, "다우오피스 추가 확인이 필요합니다.");
-                }
-
-                await Task.Delay(800);
-                await ProbeDomAndApiStatusAsync(_webView.CoreWebView2);
-
-                return (true, toBreak ? "휴게 상태로 전환되었습니다." : "근무중 상태로 전환되었습니다.");
-            }
-
-            return (false, $"다우오피스 페이지에서 {(toBreak ? "휴게" : "업무")} 버튼을 찾지 못했습니다 ({result}). 그룹웨어 창에서 직접 확인해주세요.");
+            return (true, successMessage);
         }
-        catch (Exception ex)
+
+        ClearManualStatusOverride();
+
+        if (res.NeedsLogin)
         {
-            return (false, $"처리 중 오류: {ex.Message}");
+            UpdateSnapshot(new AttendanceSnapshot(
+                WorkStatusKind.NeedsLogin,
+                "로그인 필요",
+                "클릭하여 크롬에서 다우오피스 로그인 / 2차 인증 완료",
+                null,
+                null,
+                null,
+                DateTime.Now));
+            return (false, string.IsNullOrWhiteSpace(res.Message) ? "크롬에서 다우오피스 로그인이 필요합니다." : res.Message);
         }
+
+        _bridge.EnqueueFireAndForget("REFRESH");
+        return (false, string.IsNullOrWhiteSpace(res.Message) ? "처리 중 오류가 발생했습니다." : res.Message);
     }
 
     public void ClearManualStatusOverride()
@@ -1362,7 +467,6 @@ public sealed class DaouAttendanceService
             _userBreakWindowsToday.Clear();
         }
 
-        // 휴게 상태에서 근무중/퇴근으로 돌아올 때 방금까지의 수동 휴게 구간을 휴게 목록에 누적
         if (_activeBreakStartTime.HasValue && status != WorkStatusKind.Break)
         {
             DateTime now = DateTime.Now;
@@ -1373,7 +477,6 @@ public sealed class DaouAttendanceService
             _activeBreakStartTime = null;
         }
 
-        // 다우오피스 업무 상태로 전환 가능한 경우(퇴근 -> 업무 복귀 시), 이전 퇴근 시각부터 현재 복귀 시각까지의 공백을 휴게 구간으로 추가
         if (CurrentSnapshot.Status == WorkStatusKind.OffWork && status == WorkStatusKind.Working && CurrentSnapshot.IsResumeWorkAvailable)
         {
             if (TimeSpan.TryParse(CurrentSnapshot.ClockOutTimeText, out TimeSpan offTime))
@@ -1416,7 +519,6 @@ public sealed class DaouAttendanceService
         }
         else if (status == WorkStatusKind.Working)
         {
-            // 휴게 복귀 또는 당일 업무 복귀면 이전 출근 시각 유지, 첫 출근이면 현재 시각
             string workClockIn = (CurrentSnapshot.HasClockedInToday || CurrentSnapshot.IsResumeWorkAvailable)
                 ? (CurrentSnapshot.ClockInTimeText ?? nowTime)
                 : nowTime;
@@ -1452,6 +554,112 @@ public sealed class DaouAttendanceService
         }
     }
 
+    private void TryRestoreTodaySnapshotFromCache()
+    {
+        try
+        {
+            if (!File.Exists(LastProbeLogPath))
+                return;
+
+            DateTime lastWrite = File.GetLastWriteTime(LastProbeLogPath);
+            if (lastWrite.Date != DateTime.Today)
+                return;
+
+            string json = File.ReadAllText(LastProbeLogPath);
+            if (string.IsNullOrWhiteSpace(json))
+                return;
+
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            bool isLogin = root.TryGetProperty("isLoginPage", out var lp) && lp.GetBoolean();
+            if (isLogin)
+                return;
+
+            string state = root.TryGetProperty("state", out var sProp) ? (sProp.GetString() ?? "") : "";
+            string? clockIn = TryNormalizeClockTimeText(root.TryGetProperty("clockIn", out var inProp) ? inProp.GetString() : null);
+            string? clockOut = TryNormalizeClockTimeText(root.TryGetProperty("clockOut", out var outProp) ? outProp.GetString() : null);
+            string? duration = root.TryGetProperty("duration", out var durProp) ? durProp.GetString() : null;
+
+            if (state == "WORKING" && !string.IsNullOrWhiteSpace(clockIn))
+            {
+                CurrentSnapshot = new AttendanceSnapshot(
+                    WorkStatusKind.Working,
+                    "근무중",
+                    $"출근 {clockIn}" + (!string.IsNullOrWhiteSpace(duration) ? $" · {duration}" : ""),
+                    clockIn,
+                    clockOut,
+                    duration,
+                    DateTime.Now);
+            }
+            else if (state == "BREAK")
+            {
+                CurrentSnapshot = new AttendanceSnapshot(
+                    WorkStatusKind.Break,
+                    "휴게",
+                    "휴게중",
+                    clockIn,
+                    clockOut,
+                    duration,
+                    DateTime.Now);
+            }
+            else if (state == "OFF_WORK")
+            {
+                string sub = !string.IsNullOrWhiteSpace(clockOut) ? $"퇴근 {clockOut}" : "출근 전";
+                CurrentSnapshot = new AttendanceSnapshot(
+                    WorkStatusKind.OffWork,
+                    "퇴근",
+                    sub,
+                    clockIn,
+                    clockOut,
+                    duration,
+                    DateTime.Now);
+            }
+        }
+        catch
+        {
+            // Ignore cache restore errors
+        }
+    }
+
+    private string? GetCachedClockInToday()
+    {
+        try
+        {
+            if (File.Exists(LastProbeLogPath) && File.GetLastWriteTime(LastProbeLogPath).Date == DateTime.Today)
+            {
+                string json = File.ReadAllText(LastProbeLogPath);
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("clockIn", out var inProp))
+                {
+                    string? cin = TryNormalizeClockTimeText(inProp.GetString());
+                    if (!string.IsNullOrWhiteSpace(cin))
+                        return cin;
+                }
+            }
+        }
+        catch
+        {
+            // Ignore
+        }
+        return null;
+    }
+
+    private static string? TryNormalizeClockTimeText(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        string trimmed = raw.Trim();
+        if (trimmed.Contains('T') &&
+            DateTimeOffset.TryParse(trimmed, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset dto))
+        {
+            return dto.LocalDateTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+        }
+
+        return trimmed;
+    }
+
     private static IReadOnlyList<BreakTimeWindow> NormalizeAndMergeBreakWindows(IEnumerable<BreakTimeWindow>? windows)
     {
         if (windows == null)
@@ -1471,7 +679,6 @@ public sealed class DaouAttendanceService
             var prev = merged[^1];
             var cur = valid[i];
 
-            // 1분 이내로 겹치거나 맞닿은 휴게 구간은 하나로 병합하여 중복 차감/합산 방지
             if (cur.Start <= prev.End.Add(TimeSpan.FromMinutes(1)))
             {
                 TimeSpan maxEnd = cur.End > prev.End ? cur.End : prev.End;
@@ -1504,45 +711,16 @@ public sealed class DaouAttendanceService
         return NormalizeAndMergeBreakWindows(combined);
     }
 
-    public async Task ProbeDomAndApiStatusAsync(CoreWebView2 webView)
-    {
-        try
-        {
-            string rawJson = await webView.ExecuteScriptAsync(GetAttendanceProbeScript());
-            string? innerJson = JsonSerializer.Deserialize<string>(rawJson);
-            if (!string.IsNullOrWhiteSpace(innerJson))
-            {
-                ProcessWebMessageJson(innerJson);
-            }
-        }
-        catch
-        {
-            // Ignore transient script failures
-        }
-    }
-
-    private void ProcessWebMessageJson(string innerJson)
+    public void ProcessWebMessageJson(string innerJson)
     {
         try
         {
             using var doc = JsonDocument.Parse(innerJson);
             var root = doc.RootElement;
 
-            // 로그인 폼 제출 시 자격증명(ID/PW) 캡처 메시지인 경우 DPAPI로 암호화 저장
-            if (root.TryGetProperty("msgType", out var msgTypeProp) &&
-                msgTypeProp.GetString() == "LOGIN_CREDENTIALS")
-            {
-                string? user = root.TryGetProperty("username", out var uProp) ? uProp.GetString() : null;
-                string? pass = root.TryGetProperty("password", out var pProp) ? pProp.GetString() : null;
-                if (!string.IsNullOrWhiteSpace(user) && !string.IsNullOrWhiteSpace(pass))
-                {
-                    SaveCredentials(user, pass);
-                }
-                return;
-            }
-
             try
             {
+                Directory.CreateDirectory(AppDataFolder);
                 File.WriteAllText(LastProbeLogPath, innerJson);
             }
             catch
@@ -1551,17 +729,15 @@ public sealed class DaouAttendanceService
             }
 
             string probeUrl = root.TryGetProperty("url", out var urlProp) ? (urlProp.GetString() ?? "") : "";
-            string currentSrc = _webView?.CoreWebView2?.Source ?? string.Empty;
             bool isLogin = (root.TryGetProperty("isLoginPage", out var loginProp) && loginProp.GetBoolean()) ||
-                           IsLoginUrl(probeUrl) ||
-                           IsLoginUrl(currentSrc);
+                           IsLoginUrl(probeUrl);
 
             if (isLogin)
             {
                 UpdateSnapshot(new AttendanceSnapshot(
                     WorkStatusKind.NeedsLogin,
                     "로그인 필요",
-                    "클릭하여 다우오피스 로그인 / 2차 인증 완료",
+                    "클릭하여 크롬에서 다우오피스 로그인 / 2차 인증 완료",
                     null,
                     null,
                     null,
@@ -1569,28 +745,47 @@ public sealed class DaouAttendanceService
                 return;
             }
 
-            if (_webView?.CoreWebView2 != null)
-            {
-                _ = PersistSessionCookiesAsync(_webView.CoreWebView2);
-            }
-
             string state = root.TryGetProperty("state", out var sProp) ? (sProp.GetString() ?? "UNKNOWN") : "UNKNOWN";
-            if (state == "PAGE_OUTDATED_NEEDS_RELOAD")
-            {
-                // 백그라운드에서는 날짜가 지난 페이지를 강제 리로드하지 않는다 (자정/휴일 백그라운드 로그인 유발 방지).
-                // 유저가 출근 등 액션을 실행할 때 EnsureFreshAttendancePageForUserActionAsync에서 갱신한다.
-                return;
-            }
-
-            if (state == "LOADING" || state == "UNKNOWN")
+            if (state == "PAGE_OUTDATED_NEEDS_RELOAD" || state == "LOADING" || state == "UNKNOWN")
                 return;
 
-            string? clockIn = root.TryGetProperty("clockIn", out var inProp) ? inProp.GetString() : null;
-            string? clockOut = root.TryGetProperty("clockOut", out var outProp) ? outProp.GetString() : null;
+            string? clockIn = TryNormalizeClockTimeText(root.TryGetProperty("clockIn", out var inProp) ? inProp.GetString() : null);
+            string? clockOut = TryNormalizeClockTimeText(root.TryGetProperty("clockOut", out var outProp) ? outProp.GetString() : null);
             string? duration = root.TryGetProperty("duration", out var durProp) ? durProp.GetString() : null;
             string? badgeText = root.TryGetProperty("badgeText", out var bProp) ? bProp.GetString() : null;
             bool canClockIn = root.TryGetProperty("canClockIn", out var cInProp) && cInProp.GetBoolean();
             bool canResumeWork = root.TryGetProperty("canResumeWork", out var cResProp) && cResProp.GetBoolean();
+
+            // todayGadgetData 내 workStatusName("출근"), displayWorkType("ON") 및 UTC ISO 시각 보조 보정
+            if (root.TryGetProperty("todayGadgetData", out var tgProp) &&
+                tgProp.ValueKind == JsonValueKind.Object &&
+                tgProp.TryGetProperty("data", out var gdProp) &&
+                gdProp.ValueKind == JsonValueKind.Object)
+            {
+                if (string.IsNullOrWhiteSpace(clockIn) &&
+                    gdProp.TryGetProperty("startWorkTime", out var swProp) &&
+                    swProp.ValueKind == JsonValueKind.String)
+                {
+                    clockIn = TryNormalizeClockTimeText(swProp.GetString());
+                }
+                if (string.IsNullOrWhiteSpace(clockOut) &&
+                    gdProp.TryGetProperty("endWorkTime", out var ewProp) &&
+                    ewProp.ValueKind == JsonValueKind.String)
+                {
+                    clockOut = TryNormalizeClockTimeText(ewProp.GetString());
+                }
+
+                string ws = gdProp.TryGetProperty("workStatusName", out var wsProp) ? (wsProp.GetString() ?? "") : "";
+                string dwt = gdProp.TryGetProperty("displayWorkType", out var dwtProp) ? (dwtProp.GetString() ?? "") : "";
+                if (ws == "출근" || ws == "업무" || string.Equals(dwt, "ON", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (state != "BREAK") state = "WORKING";
+                }
+                else if (ws == "휴게" || ws == "외출")
+                {
+                    state = "BREAK";
+                }
+            }
 
             List<BreakTimeWindow>? breakWindows = null;
             if (root.TryGetProperty("breakRanges", out var brProp) && brProp.ValueKind == JsonValueKind.Array)
@@ -1603,8 +798,8 @@ public sealed class DaouAttendanceService
                     {
                         var parts = rangeStr.Split('~', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                         if (parts.Length == 2 &&
-                            TimeSpan.TryParse(parts[0], System.Globalization.CultureInfo.InvariantCulture, out TimeSpan bs) &&
-                            TimeSpan.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out TimeSpan be))
+                            TimeSpan.TryParse(parts[0], CultureInfo.InvariantCulture, out TimeSpan bs) &&
+                            TimeSpan.TryParse(parts[1], CultureInfo.InvariantCulture, out TimeSpan be))
                         {
                             breakWindows.Add(new BreakTimeWindow(bs, be));
                         }
@@ -1626,8 +821,8 @@ public sealed class DaouAttendanceService
                     {
                         var parts = rangeStr.Split('~', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                         if (parts.Length == 2 &&
-                            TimeSpan.TryParse(parts[0], System.Globalization.CultureInfo.InvariantCulture, out TimeSpan ubs) &&
-                            TimeSpan.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out TimeSpan ube))
+                            TimeSpan.TryParse(parts[0], CultureInfo.InvariantCulture, out TimeSpan ubs) &&
+                            TimeSpan.TryParse(parts[1], CultureInfo.InvariantCulture, out TimeSpan ube))
                         {
                             domUserBreaks.Add(new BreakTimeWindow(ubs, ube));
                         }
@@ -1637,7 +832,7 @@ public sealed class DaouAttendanceService
 
             if (root.TryGetProperty("activeBreakStart", out var absProp) &&
                 absProp.ValueKind == JsonValueKind.String &&
-                TimeSpan.TryParse(absProp.GetString(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan absTod))
+                TimeSpan.TryParse(absProp.GetString(), CultureInfo.InvariantCulture, out TimeSpan absTod))
             {
                 DateTime domBreakStart = DateTime.Today.Add(absTod);
                 if (state == "BREAK" && domBreakStart <= DateTime.Now.AddMinutes(1))
@@ -1653,7 +848,7 @@ public sealed class DaouAttendanceService
                     DateTime endRef = DateTime.Now;
                     if (state == "OFF_WORK" &&
                         !string.IsNullOrWhiteSpace(clockOut) &&
-                        TimeSpan.TryParse(clockOut.Trim(), System.Globalization.CultureInfo.InvariantCulture, out TimeSpan outTod))
+                        TimeSpan.TryParse(clockOut.Trim(), CultureInfo.InvariantCulture, out TimeSpan outTod))
                     {
                         endRef = DateTime.Today.Add(outTod);
                     }
@@ -1688,8 +883,6 @@ public sealed class DaouAttendanceService
 
             if (_manualStatusOverride.HasValue && _manualOverrideDate == DateTime.Today)
             {
-                // 다우오피스에서 실제 최신 상태(state)가 명확히 감지된 경우,
-                // 다우오피스의 실제 근태 정보를 우선(Source of Truth)으로 삼고 수동 오버라이드를 자동 해제한다.
                 if (state == "WORKING" || state == "BREAK" || state == "OFF_WORK")
                 {
                     _manualStatusOverride = null;
@@ -1814,1072 +1007,17 @@ public sealed class DaouAttendanceService
                url.Contains("alliance-v2", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string GetDocumentCreatedHookScript() => """
-        (() => {
-            window.__workdotApiLogs = window.__workdotApiLogs || [];
-
-            const recordApiData = (url, data) => {
-                try {
-                    if (!url) return;
-                    const u = String(url).toLowerCase();
-                    if (u.includes('ehr') || u.includes('attend') || u.includes('timeline') || u.includes('clock') || u.includes('status')) {
-                        window.__workdotApiLogs.push({ url: String(url), data, ts: Date.now() });
-                        if (window.__workdotApiLogs.length > 30) window.__workdotApiLogs.shift();
-                        if (typeof window.__workdotScheduleProbe === 'function') {
-                            window.__workdotScheduleProbe(200);
-                        }
-                    }
-                } catch {}
-            };
-
-            const origFetch = window.fetch;
-            if (origFetch) {
-                window.fetch = async function(...args) {
-                    const res = await origFetch.apply(this, args);
-                    try {
-                        const url = (args[0] && args[0].url) ? args[0].url : String(args[0] || '');
-                        const clone = res.clone();
-                        clone.json().then(data => recordApiData(url, data)).catch(() => {});
-                    } catch {}
-                    return res;
-                };
-            }
-
-            const origOpen = XMLHttpRequest.prototype.open;
-            const origSend = XMLHttpRequest.prototype.send;
-            XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-                this.__workdotUrl = url;
-                return origOpen.call(this, method, url, ...rest);
-            };
-            XMLHttpRequest.prototype.send = function(...args) {
-                this.addEventListener('load', function() {
-                    try {
-                        if (this.responseText && this.responseText.trim().startsWith('{')) {
-                            const data = JSON.parse(this.responseText);
-                            recordApiData(this.__workdotUrl, data);
-                        }
-                    } catch {}
-                });
-                return origSend.apply(this, args);
-            };
-
-            let probeTimer = null;
-            window.__workdotScheduleProbe = (delayMs = 400) => {
-                if (probeTimer) clearTimeout(probeTimer);
-                probeTimer = setTimeout(() => {
-                    try {
-                        if (typeof window.__workdotRunProbe === 'function' && window.chrome?.webview?.postMessage) {
-                            const resultJson = window.__workdotRunProbe();
-                            if (resultJson) window.chrome.webview.postMessage(resultJson);
-                        }
-                    } catch {}
-                }, delayMs);
-            };
-
-            // 로그인 폼 제출 시 ID/PW를 캡처하여 이후 앱 재실행/세션 만료 시 자동 로그인에 활용
-            const captureLoginCredentials = () => {
-                try {
-                    const passInput = document.querySelector('input[type="password"], #password, input[name="password"]');
-                    const userInput = document.querySelector('#username, #userId, #loginId, input[name="username"], input[name="userId"], input[type="text"], input[type="email"]');
-                    if (passInput && userInput && userInput.value && passInput.value && window.chrome?.webview?.postMessage) {
-                        window.chrome.webview.postMessage(JSON.stringify({
-                            msgType: 'LOGIN_CREDENTIALS',
-                            username: userInput.value,
-                            password: passInput.value
-                        }));
-                    }
-                } catch {}
-            };
-
-            window.addEventListener('submit', captureLoginCredentials, true);
-            window.addEventListener('click', (e) => {
-                const target = e.target;
-                if (target && document.querySelector('input[type="password"]')) {
-                    captureLoginCredentials();
-                }
-            }, true);
-            window.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && document.querySelector('input[type="password"]')) {
-                    captureLoginCredentials();
-                }
-            }, true);
-
-            window.addEventListener('DOMContentLoaded', () => {
-                if (document.body) {
-                    const obs = new MutationObserver(() => window.__workdotScheduleProbe(500));
-                    obs.observe(document.body, { childList: true, subtree: true, characterData: true });
-                }
-            });
-        })();
-        """;
-
-    private static string GetDismissPopupsScript() => """
-        (() => {
-            let count = 0;
-            const closeBtnSelectors = [
-                '.layer_notice .btn_layer_x',
-                '.notice_popup .close',
-                '.notice_popup .btn_layer_x',
-                '.survey_popup .close',
-                '.survey_popup .btn_layer_x',
-                '[data-role="surveyClose"]',
-                '.btn_popup_close'
-            ];
-            for (const sel of closeBtnSelectors) {
-                document.querySelectorAll(sel).forEach(el => {
-                    // 전자결재, 메일, 조직도 등 업무 관련 모달 레이어 내부의 버튼은 절대 닫지 않는다
-                    if (el.closest('.layer_appr, [data-app="approval"], [id*="approval"], .appr_line_wrap, .approval_modal, .org_tree')) {
-                        return;
-                    }
-                    try { el.click(); count++; } catch {}
-                });
-            }
-
-            // 본문 없이 화면을 검게 가리고 있는 잔여 딤 레이어(.layer_dimm, .dimm 등) 정리
-            document.querySelectorAll('.layer_dimm, .dimm, .layer_backdrop, .modal-backdrop, [class*="dimm"]').forEach(dim => {
-                if (!document.querySelector('.layer_normal, .layer_doc, .layer_appr, .approval_modal, [data-app="approval"]')) {
-                    try { dim.remove(); count++; } catch {}
-                }
-            });
-
-            return count;
-        })();
-        """;
-
-    private static string GetAttendanceProbeScript() => """
-        (() => {
-            const runProbe = () => {
-                const url = location.href;
-                const urlLower = url.toLowerCase();
-
-                // 1. 다우오피스 정상 근태 화면 UI 요소(가젯, 실시간 시계, 상단 메뉴)가 있는지 확인
-                const hasEhrAttendUi = Boolean(document.querySelector('.lnb_gadget.gadget_attend, .attend_card, #timelineClock, .wrap_today_time'));
-
-                // 2. 로그인 또는 2차 인증 페이지 여부 정밀 감지
-                const isAuthUrl = urlLower.includes('/login') ||
-                                  urlLower.includes('/auth') ||
-                                  urlLower.includes('/otp') ||
-                                  urlLower.includes('/twofactor') ||
-                                  urlLower.includes('2fa') ||
-                                  urlLower.includes('mfa') ||
-                                  urlLower.includes('sso') ||
-                                  urlLower.includes('alliance-v2');
-
-                const hasPasswordInput = Boolean(document.querySelector('input[type="password"]'));
-                const hasOtpOrAuthInput = Boolean(document.querySelector(
-                    'input[name*="otp" i], input[id*="otp" i], input[name*="authCode" i], input[id*="authCode" i], input[name*="cert" i], input[id*="cert" i], input[autocomplete="one-time-code"], input[placeholder*="인증" i], input[placeholder*="OTP" i]'
-                ));
-                const hasLoginBtn = Boolean(document.querySelector('#login_submit, #btnLogin, .btn_login, #btn_submit, [data-role="login"]'));
-
-                // 정상 근태 UI가 로드되지 않은 상태에서 로그인 URL이거나 로그인/2차인증 폼이 보이면 100% 로그인 미완료!
-                if (!hasEhrAttendUi && (isAuthUrl || hasPasswordInput || hasOtpOrAuthInput || hasLoginBtn)) {
-                    return JSON.stringify({ isLoginPage: true, url });
-                }
-
-                const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-                const timeOnlyRe = /\b([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?\b/;
-                const unsetRe = /(미등록|미체크|퇴근전|출근전|--:--|^-$|^-\s*:\s*-)/;
-
-                const docs = [document];
-                document.querySelectorAll('iframe').forEach(ifr => {
-                    try { if (ifr.contentDocument) docs.push(ifr.contentDocument); } catch {}
-                });
-
-                const liveClockTimes = new Set();
-                const now = new Date();
-                const pad2 = (n) => String(n).padStart(2, '0');
-                for (let diff = -2; diff <= 2; diff++) {
-                    const d = new Date(now.getTime() + diff * 1000);
-                    liveClockTimes.add(`${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`);
-                }
-                for (const doc of docs) {
-                    doc.querySelectorAll('#timelineClock, .time_info, .clock, #clock, .now_time, .real_time').forEach(el => {
-                        const m = clean(el.innerText).match(timeOnlyRe);
-                        if (m) liveClockTimes.add(m[0]);
-                    });
-                }
-
-                const isLiveClockValue = (t) => t && liveClockTimes.has(t);
-
-                let clockIn = null;
-                let clockOut = null;
-                let clockOutExplicitlyUnset = false;
-                let duration = null;
-                let badgeText = null;
-                let apiStatus = null;
-                const breakRangesSet = new Set();
-
-                const addBreakRange = (startStr, endStr) => {
-                    if (!startStr || !endStr) return;
-                    const sm = String(startStr).match(/([01]\d|2[0-3]):[0-5]\d/);
-                    const em = String(endStr).match(/([01]\d|2[0-3]):[0-5]\d/);
-                    if (sm && em) {
-                        breakRangesSet.add(`${sm[0]}~${em[0]}`);
-                    }
-                };
-
-                const yyyy = now.getFullYear();
-                const mm = pad2(now.getMonth() + 1);
-                const dd = pad2(now.getDate());
-                const todayIso = `${yyyy}-${mm}-${dd}`;
-                const todayDot = `${yyyy}.${mm}.${dd}`;
-                const todayCompact = `${yyyy}${mm}${dd}`;
-
-                // 전략 0: 다우오피스 EHR 좌측 실시간 근태 가젯(.lnb_gadget.gadget_attend) DOM에서 최우선 추출
-                for (const doc of docs) {
-                    const gadget = doc.querySelector('.lnb_gadget.gadget_attend, .attend_card');
-                    if (!gadget) continue;
-
-                    // 가젯 헤더의 날짜 확인 (예: "2026년 11월 04일")
-                    const timeEl = gadget.querySelector('.wrap_today_time .today_time, .today_time');
-                    const dateTxt = clean(timeEl?.innerText || '');
-                    if (dateTxt) {
-                        const mMonth = dateTxt.match(/(\d{1,2})월/);
-                        const mDay = dateTxt.match(/(\d{1,2})일/);
-                        if (mMonth && mDay) {
-                            const gMonth = pad2(parseInt(mMonth[1], 10));
-                            const gDay = pad2(parseInt(mDay[1], 10));
-                            if (gMonth !== mm || gDay !== dd) {
-                                return JSON.stringify({ state: 'PAGE_OUTDATED_NEEDS_RELOAD', url });
-                            }
-                        }
-                    }
-
-                    const tag = gadget.querySelector('.gadget_header .basic_tag, .card_header .basic_tag');
-                    if (tag) {
-                        const tagCls = (tag.className || '').toLowerCase();
-                        const tagTxt = clean(tag.innerText);
-                        if (tagTxt === '휴게' || tagTxt === '외출') {
-                            badgeText = '휴게';
-                            apiStatus = tagTxt;
-                        } else if (tagCls.includes('positive') || tagTxt === '업무' || tagTxt.includes('근무')) {
-                            badgeText = '근무중';
-                            apiStatus = tagTxt || 'ON';
-                        } else if (tagTxt === '퇴근' || tagTxt === '업무종료') {
-                            badgeText = '퇴근';
-                            apiStatus = tagTxt || 'OFF';
-                        } else if (tagCls.includes('neutral')) {
-                            badgeText = '퇴근';
-                            apiStatus = tagTxt || 'OFF';
-                        }
-                    }
-
-                    const workTypes = Array.from(gadget.querySelectorAll('.working_hours .work_type'));
-                    for (const wt of workTypes) {
-                        const tit = clean(wt.querySelector('.tit')?.innerText || '');
-                        const data = clean(wt.querySelector('.data')?.innerText || '');
-                        if (tit.includes('출근')) {
-                            const m = data.match(timeOnlyRe);
-                            if (m && !isLiveClockValue(m[0])) clockIn = m[0];
-                        } else if (tit.includes('퇴근')) {
-                            const m = data.match(timeOnlyRe);
-                            if (m && !isLiveClockValue(m[0])) {
-                                clockOut = m[0];
-                                clockOutExplicitlyUnset = false;
-                            } else if (unsetRe.test(data) && !clockOut) {
-                                clockOutExplicitlyUnset = true;
-                            }
-                        }
-                    }
-                }
-
-                // 전략 1: 가로챈 다우오피스 API JSON(__workdotApiLogs)에서 최신 오늘 데이터 및 휴게시간(fixedBreakTimeList) 추출
-                if (Array.isArray(window.__workdotApiLogs)) {
-                    let lockedLatestAttendRecord = Boolean(clockIn || clockOut);
-                    for (let i = window.__workdotApiLogs.length - 1; i >= 0; i--) {
-                        const entry = window.__workdotApiLogs[i];
-                        if (!entry || !entry.data) continue;
-
-                        // gadget/today 최신 응답에서 현재 근무상태(workStatusName) 안전하게 추출
-                        if (entry.url && entry.url.includes('gadget/today') && entry.data?.data?.workStatusName && !badgeText) {
-                            const ws = entry.data.data.workStatusName;
-                            if (ws === '휴게' || ws === '외출') {
-                                badgeText = '휴게';
-                                apiStatus = ws;
-                            } else if (ws === '업무') {
-                                badgeText = '근무중';
-                                apiStatus = ws;
-                            }
-                        }
-
-                        let entryHadAttendRecord = false;
-                        const visit = (obj) => {
-                            if (!obj || typeof obj !== 'object') return;
-                            if (Array.isArray(obj)) {
-                                obj.forEach(visit);
-                                return;
-                            }
-
-                            // 다우오피스 근무그룹 휴게시간 목록 (fixedBreakTimeList) 추출
-                            if (Array.isArray(obj.fixedBreakTimeList)) {
-                                obj.fixedBreakTimeList.forEach(b => {
-                                    if (b && b.breakStartTime && b.breakEndTime) {
-                                        addBreakRange(b.breakStartTime, b.breakEndTime);
-                                    }
-                                });
-                            }
-
-                            const dVal = obj.date || obj.accrualDate || obj.logDate || obj.workDate || obj.baseDate || obj.targetDate || obj.attndDate || obj.solarDate;
-                            if (typeof dVal === 'string') {
-                                const dClean = dVal.slice(0, 10);
-                                if (/^\d{4}[-.]?\d{2}[-.]?\d{2}/.test(dClean) &&
-                                    !dClean.includes(todayIso) && !dClean.includes(todayDot) && !dClean.includes(todayCompact)) {
-                                    return;
-                                }
-                            }
-
-                            // 일일 인정 근무시간(dailyWorkHoursDto.sumWorkingHours) 초 단위 추출
-                            if (obj.dailyWorkHoursDto && typeof obj.dailyWorkHoursDto.sumWorkingHours === 'number' && obj.dailyWorkHoursDto.sumWorkingHours > 0 && !duration) {
-                                const totalSec = obj.dailyWorkHoursDto.sumWorkingHours;
-                                const h = Math.floor(totalSec / 3600);
-                                const m = Math.floor((totalSec % 3600) / 60);
-                                duration = `${pad2(h)}:${pad2(m)}`;
-                            }
-
-                            // 이미 최신 API 응답(또는 실시간 가젯 DOM)에서 출퇴근 시각을 확보했다면 과거 로그로 덮어쓰지 않음
-                            if (!lockedLatestAttendRecord) {
-                                let inRaw = obj.startWorkTime ?? obj.clockInTime ?? obj.workInTime ?? obj.attndInTime ?? obj.inTime ?? obj.checkInTime ?? obj.realClockInTime;
-                                let outRaw = obj.endWorkTime ?? obj.clockOutTime ?? obj.workOutTime ?? obj.attndOutTime ?? obj.outTime ?? obj.checkOutTime ?? obj.realClockOutTime;
-                                const stRaw = obj.displayWorkType ?? obj.workStatusName ?? obj.workStatus ?? obj.timelineStatus ?? obj.attndStatus ?? obj.workingStatus ?? obj.statusName ?? obj.stateName;
-
-                                if (typeof inRaw === 'string' && inRaw.includes('T')) {
-                                    try {
-                                        const d = new Date(inRaw);
-                                        if (!isNaN(d.getTime())) {
-                                            inRaw = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
-                                        }
-                                    } catch {}
-                                }
-                                if (typeof outRaw === 'string' && outRaw.includes('T')) {
-                                    try {
-                                        const d = new Date(outRaw);
-                                        if (!isNaN(d.getTime())) {
-                                            outRaw = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
-                                        }
-                                    } catch {}
-                                }
-
-                                if (typeof inRaw === 'string' && timeOnlyRe.test(inRaw) && !clockIn) {
-                                    const m = inRaw.match(timeOnlyRe)[0];
-                                    if (!isLiveClockValue(m)) {
-                                        clockIn = m;
-                                        entryHadAttendRecord = true;
-                                    }
-                                }
-                                if (typeof outRaw === 'string') {
-                                    if (timeOnlyRe.test(outRaw) && !outRaw.startsWith('00:00') && !clockOut) {
-                                        const m = outRaw.match(timeOnlyRe)[0];
-                                        if (!isLiveClockValue(m)) {
-                                            clockOut = m;
-                                            clockOutExplicitlyUnset = false;
-                                            entryHadAttendRecord = true;
-                                        }
-                                    } else if ((!outRaw || unsetRe.test(outRaw)) && !clockOut) {
-                                        clockOutExplicitlyUnset = true;
-                                    }
-                                } else if (inRaw && (outRaw === null || outRaw === undefined || outRaw === '') && !clockOut) {
-                                    clockOutExplicitlyUnset = true;
-                                }
-
-                                if (typeof stRaw === 'string' && !apiStatus) {
-                                    apiStatus = stRaw;
-                                }
-                            }
-
-                            for (const k of Object.keys(obj)) {
-                                if (typeof obj[k] === 'object') visit(obj[k]);
-                            }
-                        };
-                        try { visit(entry.data); } catch {}
-                        if (entryHadAttendRecord) {
-                            lockedLatestAttendRecord = true;
-                        }
-                    }
-                }
-
-                // 전략 2: DOM 탐색
-                const isInsidePastTableRow = (el) => {
-                    const tr = el.closest('tr, .tb_row, .timeline_row, [class*="row"]');
-                    if (!tr) return false;
-                    const trText = clean(tr.innerText);
-                    const hasDatePrefix = /\b\d{2}\s*\([월화수목금토일]\)|\b\d{4}[-.]\d{2}[-.]\d{2}\b/.test(trText);
-                    if (!hasDatePrefix) return false;
-
-                    const isTodayRow =
-                        tr.classList.contains('today') ||
-                        tr.querySelector('.today, .badge_today, [class*="today"]') !== null ||
-                        trText.includes(todayIso) ||
-                        trText.includes(todayDot) ||
-                        trText.includes(`${mm}.${dd}`) ||
-                        trText.includes(`${mm}-${dd}`) ||
-                        new RegExp(`\\b${dd}\\s*\\([월화수목금토일]\\)`).test(trText);
-
-                    return !isTodayRow;
-                };
-
-                for (const doc of docs) {
-                    const inSelectors = ['#workInTime', '#clockInTime', '.work_in_time', '.clock_in_time', '[data-role="clockInTime"]', '[data-id="clockInTime"]'];
-                    for (const sel of inSelectors) {
-                        const el = doc.querySelector(sel);
-                        if (el) {
-                            const m = clean(el.innerText).match(timeOnlyRe);
-                            if (m && !isLiveClockValue(m[0]) && !clockIn) clockIn = m[0];
-                        }
-                    }
-
-                    const outSelectors = ['#workOutTime', '#clockOutTime', '.work_out_time', '.clock_out_time', '[data-role="clockOutTime"]', '[data-id="clockOutTime"]'];
-                    for (const sel of outSelectors) {
-                        const el = doc.querySelector(sel);
-                        if (el) {
-                            const t = clean(el.innerText);
-                            const m = t.match(timeOnlyRe);
-                            if (m && !isLiveClockValue(m[0]) && !clockOut) clockOut = m[0];
-                            else if (unsetRe.test(t)) clockOutExplicitlyUnset = true;
-                        }
-                    }
-
-                    const allNodes = Array.from(doc.querySelectorAll('dt, th, span, div, p, strong, label, li'));
-                    for (const el of allNodes) {
-                        if (isInsidePastTableRow(el)) continue;
-
-                        const ownText = clean(el.innerText);
-                        if (!ownText || ownText.length > 40) continue;
-
-                        if (/^(출근시간|출근시각|출근|업무시작)$/.test(ownText)) {
-                            const sib = el.nextElementSibling;
-                            if (sib) {
-                                const sibText = clean(sib.innerText);
-                                const m = sibText.match(timeOnlyRe);
-                                if (m && !isLiveClockValue(m[0]) && !clockIn) clockIn = m[0];
-                            }
-                        } else if (!clockIn) {
-                            const afterInMatch = ownText.match(/(?:출근시간|출근시각|출근|업무시작)\s*[:：]?\s*([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?/);
-                            if (afterInMatch) {
-                                const m = afterInMatch[0].match(timeOnlyRe);
-                                if (m && !isLiveClockValue(m[0])) clockIn = m[0];
-                            }
-                        }
-
-                        if (/^(퇴근시간|퇴근시각|퇴근|업무종료)$/.test(ownText)) {
-                            const sib = el.nextElementSibling;
-                            if (sib) {
-                                const sibText = clean(sib.innerText);
-                                const m = sibText.match(timeOnlyRe);
-                                if (m && !isLiveClockValue(m[0]) && !clockOut) clockOut = m[0];
-                                else if (unsetRe.test(sibText)) clockOutExplicitlyUnset = true;
-                            }
-                        } else if (!clockOut) {
-                            const afterOutMatch = ownText.match(/(?:퇴근시간|퇴근시각|퇴근|업무종료)\s*[:：]?\s*([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?/);
-                            if (afterOutMatch) {
-                                const m = afterOutMatch[0].match(timeOnlyRe);
-                                if (m && !isLiveClockValue(m[0])) clockOut = m[0];
-                            } else if (/(?:퇴근시간|퇴근시각|퇴근)\s*[:：]?\s*(미등록|--|-)/.test(ownText)) {
-                                clockOutExplicitlyUnset = true;
-                            }
-                        }
-
-                        // 다우오피스 근무그룹 카드의 휴게시간 (예: "12:00 ~ 13:00(1h)") 추출
-                        if (/^(휴게시간|휴게)$/.test(ownText)) {
-                            const sib = el.nextElementSibling;
-                            if (sib) {
-                                const sibText = clean(sib.innerText);
-                                const rangeMatches = sibText.matchAll(/([01]\d|2[0-3]):[0-5]\d\s*~\s*([01]\d|2[0-3]):[0-5]\d/g);
-                                for (const rm of rangeMatches) {
-                                    addBreakRange(rm[1] ? rm[0].split('~')[0] : null, rm[0].split('~')[1]);
-                                }
-                            }
-                        }
-
-                        // 다우오피스 일일 요약의 총 근무시간 (예: "3h 15m 0s") 추출 (0h 0m 0s 제외)
-                        if (/^(총 근무시간|총근무시간|인정근무시간)$/.test(ownText) && !duration) {
-                            const sib = el.nextElementSibling;
-                            if (sib) {
-                                const sibText = clean(sib.innerText);
-                                const hmMatch = sibText.match(/(\d+)\s*h\s*(\d+)\s*m/i) || sibText.match(/(\d+)\s*시간\s*(\d+)\s*분/);
-                                if (hmMatch) {
-                                    const h = parseInt(hmMatch[1], 10);
-                                    const m = parseInt(hmMatch[2], 10);
-                                    if (h > 0 || m > 0) {
-                                        duration = `${pad2(h)}:${pad2(m)}`;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    const todayRows = Array.from(doc.querySelectorAll('tr.today, .today_row, .tb_attend .today'));
-                    for (const row of todayRows) {
-                        const rowToCheck = row.closest('tr') || row;
-                        const times = (clean(rowToCheck.innerText).match(/\b([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?\b/g) || [])
-                            .filter(t => !isLiveClockValue(t));
-                        if (times.length === 1 && !clockIn) {
-                            clockIn = times[0];
-                            clockOutExplicitlyUnset = true;
-                        } else if (times.length >= 2) {
-                            if (!clockIn) clockIn = times[0];
-                            if (!clockOut && !clockOutExplicitlyUnset) clockOut = times[1];
-                        }
-                    }
-
-                    const statusEls = Array.from(doc.querySelectorAll(
-                        'select option:checked, .gadget_header .basic_tag .txt, .card_header .basic_tag .txt, .basic_tag .txt, .state, .status, .badge, .chip, .txt_state, .btn_state'
-                    ));
-                    for (const el of statusEls) {
-                        if (el.tagName !== 'OPTION' && el.offsetParent === null) continue;
-                        if (el.closest('ul, .layer_transition, .dropdown, [style*="display: none"], [style*="display:none"]')) continue;
-                        if (isInsidePastTableRow(el)) continue;
-
-                        const t = clean(el.innerText);
-                        if (!t || t.length > 12) continue;
-
-                        if (['근무중', '근무 중', '업무중', '업무 중', '정상근무', '연장근무', '외근', '출장'].includes(t)) {
-                            badgeText = t;
-                            break;
-                        }
-                        if (['퇴근', '업무종료', '업무 종료', '출근전', '출근 전', '미출근'].includes(t)) {
-                            badgeText = t;
-                        }
-                    }
-                }
-
-                let clockInBtnFound = false;
-                let clockInBtnDisabled = false;
-                let clockOutBtnFound = false;
-                let clockOutBtnDisabled = false;
-
-                for (const doc of docs) {
-                    const buttons = Array.from(doc.querySelectorAll('button, a, span[role="button"], div[role="button"], #workIn, #workOut, #clockIn, #clockOut'));
-                    for (const btn of buttons) {
-                        const t = clean(btn.innerText);
-                        const id = (btn.id || '').toLowerCase();
-                        const cls = ((btn.className || '') + ' ' + (btn.parentElement?.className || '')).toLowerCase();
-                        const isDisabled =
-                            btn.disabled ||
-                            cls.includes('disabled') ||
-                            cls.includes('disable') ||
-                            cls.includes('off') ||
-                            cls.includes('done') ||
-                            btn.getAttribute('aria-disabled') === 'true';
-
-                        if (id === 'workin' || id === 'clockin' || t.startsWith('출근하기') || t === '출근') {
-                            clockInBtnFound = true;
-                            if (isDisabled) clockInBtnDisabled = true;
-                            const m = t.match(timeOnlyRe);
-                            if (m && !isLiveClockValue(m[0]) && !clockIn) clockIn = m[0];
-                        }
-                        if (id === 'workout' || id === 'clockout' || t.startsWith('퇴근하기') || t === '퇴근') {
-                            clockOutBtnFound = true;
-                            if (isDisabled) clockOutBtnDisabled = true;
-                            const m = t.match(timeOnlyRe);
-                            if (m && !isLiveClockValue(m[0]) && !clockOut) clockOut = m[0];
-                        }
-                    }
-                }
-
-                if (clockOutExplicitlyUnset && !clockOut) {
-                    clockOut = null;
-                }
-
-                const hasValidClockIn = Boolean(clockIn && !clockIn.startsWith('00:00'));
-                const hasValidClockOut = Boolean(clockOut && !clockOut.startsWith('00:00'));
-
-                let state = 'UNKNOWN';
-
-                const combinedStatus = ((apiStatus || '') + ' ' + (badgeText || '')).toUpperCase();
-                const isBreakStatus = combinedStatus.includes('휴게') || combinedStatus.includes('BREAK') || combinedStatus.includes('외출');
-                const isWorkStatus = combinedStatus.includes('WORKING') || combinedStatus.includes('WORK_IN') || combinedStatus.includes('ON_WORK') ||
-                    combinedStatus.includes('근무중') || combinedStatus.includes('근무 중') ||
-                    combinedStatus.includes('업무중') || combinedStatus.includes('업무 중') ||
-                    combinedStatus.includes('업무');
-
-                if (isBreakStatus) {
-                    state = 'BREAK';
-                } else if (isWorkStatus) {
-                    state = 'WORKING';
-                } else if (clockInBtnFound && clockInBtnDisabled && clockOutBtnFound && !clockOutBtnDisabled && !hasValidClockOut) {
-                    state = 'WORKING';
-                } else if (hasValidClockIn && !hasValidClockOut) {
-                    state = 'WORKING';
-                } else if (hasValidClockOut || (clockInBtnFound && clockInBtnDisabled && clockOutBtnFound && clockOutBtnDisabled)) {
-                    state = 'OFF_WORK';
-                } else if (clockInBtnFound && !clockInBtnDisabled) {
-                    state = 'OFF_WORK';
-                } else {
-                    if (combinedStatus.includes('WORK_OUT') || combinedStatus.includes('OFF_WORK') ||
-                        combinedStatus.includes('업무종료') || combinedStatus.includes('출근전')) {
-                        state = 'OFF_WORK';
-                    } else {
-                        state = 'LOADING';
-                    }
-                }
-
-                const gadgetEl = document.querySelector('.lnb_gadget.gadget_attend, .attend_card');
-                const gadgetHtml = gadgetEl ? gadgetEl.innerHTML : '';
-                const candidateButtons = Array.from(document.querySelectorAll('button, a.btn, [role="button"], select, .work_status_wrap, .attend_btn, .status_btn')).map(el => ({
-                    tag: el.tagName,
-                    text: clean(el.innerText || el.textContent || ''),
-                    cls: el.className,
-                    id: el.id,
-                    disabled: el.disabled
-                })).filter(b => b.text && b.text.length < 30);
-
-                const todayGadgetDataObj = (window.__workdotApiLogs || []).find(l => (l.url || '').includes('gadget/today'))?.data;
-                const canClockIn = Boolean(
-                    (todayGadgetDataObj?.data?.clockInWorkStatusId) ||
-                    (clockInBtnFound && !clockInBtnDisabled)
-                );
-
-                let canResumeWork = false;
-                const ableList = todayGadgetDataObj?.data?.ableWorkStatusList || [];
-                if (Array.isArray(ableList) && ableList.some(item => (item.workStatusName || '').includes('업무'))) {
-                    canResumeWork = true;
-                }
-
-                if (!canResumeWork) {
-                    for (const doc of docs) {
-                        const items = Array.from(doc.querySelectorAll('.wrap_lnb_btn .menu_item, .select_list .menu_item, .list_menu button, .attend_btn button'));
-                        for (const it of items) {
-                            const t = clean(it.innerText);
-                            if ((t === '업무' || t.startsWith('업무') || t === '정상근무' || t.includes('복귀')) && !it.disabled) {
-                                canResumeWork = true;
-                                break;
-                            }
-                        }
-                        if (canResumeWork) break;
-                    }
-                }
-
-                if (!canResumeWork && clockInBtnFound && clockInBtnDisabled) {
-                    const hasChangeBtn = Boolean(document.querySelector('.wrap_lnb_btn button, .attend_btn .wrap_lnb_btn button'));
-                    if (hasChangeBtn) {
-                        canResumeWork = true;
-                    }
-                }
-
-                if (canClockIn) {
-                    canResumeWork = false;
-                }
-
-                // 오늘의 근무상태 내역(예: "10:17출근", "18:54휴게", "19:28업무", "21:13퇴근")에서 사용자 휴게 구간 및 진행 중 휴게 시작 시각 추출
-                const historyEvents = [];
-                const addHistoryEvent = (hm, label) => {
-                    if (!hm || !label) return;
-                    let kind = 'WORK';
-                    if (label.includes('휴게') || label.includes('외출')) {
-                        kind = 'BREAK';
-                    } else if (label.includes('퇴근') || label.includes('업무종료') || label.includes('종료')) {
-                        kind = 'OUT';
-                    }
-                    if (!historyEvents.some(e => e.time === hm && e.kind === kind)) {
-                        historyEvents.push({ time: hm, kind, label });
-                    }
-                };
-
-                const histRe = /^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?\s*(출근|업무시작|업무|정상근무|근무|복귀|연장근무|외근|출장|휴게|외출|퇴근|업무종료)$/;
-                for (const doc of docs) {
-                    const histNodes = Array.from(doc.querySelectorAll('li, .work_stop, div.txt'));
-                    for (const el of histNodes) {
-                        if (isInsidePastTableRow(el)) continue;
-                        const t = clean(el.innerText);
-                        const m = t.match(histRe);
-                        if (m) {
-                            addHistoryEvent(`${m[1]}:${m[2]}`, m[3]);
-                        }
-                    }
-                }
-
-                // timeline API 로그에서도 당일 상태 변경 내역 보완 추출
-                if (Array.isArray(window.__workdotApiLogs)) {
-                    for (let i = window.__workdotApiLogs.length - 1; i >= 0; i--) {
-                        const entry = window.__workdotApiLogs[i];
-                        if (!entry || !entry.url || !entry.url.includes(`timeline/${todayIso}`)) continue;
-                        const visitTimeline = (obj) => {
-                            if (!obj || typeof obj !== 'object') return;
-                            if (Array.isArray(obj)) {
-                                obj.forEach(visitTimeline);
-                                return;
-                            }
-                            const rawTime = obj.checkTime ?? obj.logTime ?? obj.changeTime ?? obj.startTime ?? obj.attndTime;
-                            const rawLabel = obj.workStatusName ?? obj.statusName ?? obj.displayWorkType ?? obj.stateName;
-                            if (typeof rawTime === 'string' && typeof rawLabel === 'string') {
-                                const tm = rawTime.match(/([01]\d|2[0-3]):([0-5]\d)/);
-                                if (tm && /^(출근|업무시작|업무|정상근무|근무|복귀|연장근무|외근|출장|휴게|외출|퇴근|업무종료)/.test(rawLabel.trim())) {
-                                    addHistoryEvent(`${tm[1]}:${tm[2]}`, rawLabel.trim());
-                                }
-                            }
-                            for (const k of Object.keys(obj)) {
-                                if (typeof obj[k] === 'object') visitTimeline(obj[k]);
-                            }
-                        };
-                        try { visitTimeline(entry.data); } catch {}
-                        break;
-                    }
-                }
-
-                historyEvents.sort((a, b) => a.time.localeCompare(b.time));
-
-                const userBreakRangesSet = new Set();
-                let activeBreakStart = null;
-                let openBreakStart = null;
-                let lastOutTime = null;
-
-                for (const ev of historyEvents) {
-                    if (ev.kind === 'BREAK') {
-                        if (!openBreakStart) {
-                            openBreakStart = ev.time;
-                        }
-                    } else if (ev.kind === 'WORK') {
-                        if (openBreakStart) {
-                            if (ev.time > openBreakStart) {
-                                userBreakRangesSet.add(`${openBreakStart}~${ev.time}`);
-                            }
-                            openBreakStart = null;
-                        } else if (lastOutTime) {
-                            if (ev.time > lastOutTime) {
-                                userBreakRangesSet.add(`${lastOutTime}~${ev.time}`);
-                            }
-                            lastOutTime = null;
-                        }
-                    } else if (ev.kind === 'OUT') {
-                        if (openBreakStart) {
-                            if (ev.time > openBreakStart) {
-                                userBreakRangesSet.add(`${openBreakStart}~${ev.time}`);
-                            }
-                            openBreakStart = null;
-                        }
-                        lastOutTime = ev.time;
-                    }
-                }
-
-                if (openBreakStart) {
-                    if (state === 'OFF_WORK' && clockOut) {
-                        const outHm = clockOut.slice(0, 5);
-                        if (outHm > openBreakStart) {
-                            userBreakRangesSet.add(`${openBreakStart}~${outHm}`);
-                        }
-                        openBreakStart = null;
-                    } else if (state === 'BREAK') {
-                        activeBreakStart = openBreakStart;
-                    }
-                }
-
-                return JSON.stringify({
-                    isLoginPage: false,
-                    url,
-                    state,
-                    clockIn,
-                    clockOut,
-                    clockOutExplicitlyUnset,
-                    duration,
-                    breakRanges: Array.from(breakRangesSet),
-                    userBreakRanges: Array.from(userBreakRangesSet),
-                    activeBreakStart,
-                    badgeText,
-                    apiStatus,
-                    canClockIn,
-                    canResumeWork,
-                    clockInBtnFound,
-                    clockInBtnDisabled,
-                    clockOutBtnFound,
-                    clockOutBtnDisabled,
-                    gadgetHtml,
-                    candidateButtons,
-                    apiLogs: (window.__workdotApiLogs || []).map(l => l.url),
-                    todayGadgetData: todayGadgetDataObj,
-                    searchApi: (() => {
-                        try {
-                            const entries = (window.__workdotApiLogs || []).map(l => l.url);
-                            return entries;
-                        } catch(e) { return e.message; }
-                    })(),
-                    appJsMatch: null
-                });
-            };
-
-            window.__workdotRunProbe = runProbe;
-            return runProbe();
-        })();
-        """;
-
-    /// <summary>
-    /// 첫 출근(오늘 출근 기록이 없는 날 / 다음날 첫 출근) 시 다우오피스의 활성화된 '출근하기' 버튼만 탐색하여 클릭합니다.
-    /// </summary>
-    private static string GetClockInTriggerScript() => """
-        (() => {
-            const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-
-            // 1. 다우오피스 EHR 좌측 근태 가젯의 출근하기 버튼 최우선 탐색
-            const gadgetBtns = Array.from(document.querySelectorAll('.lnb_gadget.gadget_attend .attend_btn button, .attend_card .attend_btn button, .attend_btn button'));
-            for (const btn of gadgetBtns) {
-                const t = clean(btn.innerText);
-                if (t === '출근하기' || t.startsWith('출근하기') || t === '출근' || t === '업무시작') {
-                    if (btn.disabled || btn.classList.contains('disabled')) {
-                        return 'DISABLED:' + t;
-                    }
-                    btn.click();
-                    return 'OK:GADGET:' + t;
-                }
-            }
-
-            // 2. 레거시 직접 셀렉터
-            const direct = document.querySelector('#workIn, #clockIn, [data-role="clockIn"], [data-action="clockIn"], .btn_work_in');
-            if (direct) {
-                if (direct.disabled || direct.classList.contains('disabled')) {
-                    return 'DISABLED:DIRECT';
-                }
-                direct.click();
-                return 'OK:DIRECT';
-            }
-
-            // 3. 일반 버튼 요소 탐색
-            const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]'));
-            for (const el of candidates) {
-                if (el.offsetParent === null) continue;
-                const t = clean(el.innerText);
-                if (t === '출근하기' || t.startsWith('출근하기') || t === '업무시작') {
-                    if (el.disabled || el.classList.contains('disabled')) {
-                        return 'DISABLED:' + t;
-                    }
-                    el.click();
-                    return 'OK:' + t;
-                }
-            }
-
-            return 'NOT_FOUND';
-        })();
-        """;
-
-    /// <summary>
-    /// 오늘 이미 출근 후 퇴근한 상태에서 다시 업무를 시작할 때,
-    /// 다우오피스의 '근무상태변경' -> '업무' 메뉴를 탐색하여 클릭합니다.
-    /// </summary>
-    private static string GetResumeWorkTriggerScript() => """
-        (() => {
-            const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-
-            // 1. 이미 업무/근무중 상태인지 확인
-            const gadget = document.querySelector('.lnb_gadget.gadget_attend, .attend_card');
-            const curTag = gadget ? gadget.querySelector('.gadget_header .basic_tag .txt, .card_header .basic_tag .txt') : null;
-            if (curTag && (clean(curTag.innerText) === '업무' || clean(curTag.innerText) === '근무중')) {
-                return 'ALREADY_WORKING';
-            }
-
-            // 2. 직접 복귀 버튼이 있는 경우
-            const directBtns = Array.from(document.querySelectorAll('.attend_btn button, .lnb_gadget button, button'));
-            for (const btn of directBtns) {
-                const t = clean(btn.innerText);
-                if (t === '업무복귀' || t === '업무 시작' || t === '근무재개' || t === '업무재개' || t === '복귀') {
-                    if (!btn.disabled) {
-                        btn.click();
-                        try { btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); } catch {}
-                        return 'OK:DIRECT_RETURN:' + t;
-                    }
-                }
-            }
-
-            // 3. '업무' 메뉴 아이템 탐색 헬퍼
-            const findWorkItem = () => {
-                const items = Array.from(document.querySelectorAll('.wrap_lnb_btn .menu_item, .select_list .menu_item, .list_menu button, [aria-controls="settings-modal"]'));
-                return items.find(el => {
-                    const txtSpan = el.querySelector('.critical .txt, .txt');
-                    const spanText = clean(txtSpan ? txtSpan.innerText : '');
-                    if (spanText === '업무' || spanText.startsWith('업무')) return true;
-                    const fullText = clean(el.innerText);
-                    return fullText.includes('업무') || fullText.includes('정상근무') || fullText.includes('복귀');
-                });
-            };
-
-            let workItem = findWorkItem();
-
-            // 4. 메뉴 아이템이 보이지 않거나 없는 경우 '근무상태변경' 드롭다운 버튼 클릭
-            if (!workItem || workItem.offsetParent === null) {
-                const changeBtn = document.querySelector('.wrap_lnb_btn button, .attend_btn .wrap_lnb_btn button');
-                if (changeBtn) {
-                    changeBtn.click();
-                }
-                workItem = findWorkItem();
-            }
-
-            if (workItem) {
-                if (workItem.disabled) return 'DISABLED:업무';
-                workItem.click();
-                try {
-                    workItem.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                } catch {}
-                return 'OK:WORK_CLICKED';
-            }
-
-            return 'NOT_FOUND:WORK_BTN';
-        })();
-        """;
-
-    private static string GetClockOutTriggerScript() => """
-        (() => {
-            const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-            // 1. 다우오피스 EHR 좌측 근태 가젯(.lnb_gadget.gadget_attend .attend_btn button) 최우선 탐색
-            const gadgetBtns = Array.from(document.querySelectorAll('.lnb_gadget.gadget_attend .attend_btn button, .attend_card .attend_btn button, .attend_btn button'));
-            for (const btn of gadgetBtns) {
-                const t = clean(btn.innerText);
-                if (t === '퇴근하기' || t.startsWith('퇴근하기') || t === '퇴근' || t === '업무종료') {
-                    if (btn.disabled || btn.classList.contains('disabled')) {
-                        return 'DISABLED:' + t;
-                    }
-                    btn.click();
-                    return 'OK:GADGET:' + t;
-                }
-            }
-
-            // 2. 레거시 직접 셀렉터
-            const direct = document.querySelector('#workOut, #clockOut, [data-role="clockOut"], [data-action="clockOut"], .btn_work_out');
-            if (direct) {
-                direct.click();
-                return 'OK:DIRECT';
-            }
-
-            // 3. 일반 버튼 요소 탐색 (캘린더/표 내부의 단순 텍스트 span은 클릭하지 않도록 제외)
-            const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]'));
-            for (const el of candidates) {
-                if (el.offsetParent === null) continue;
-                const t = clean(el.innerText);
-                if (t === '퇴근하기' || t.startsWith('퇴근하기') || t === '업무종료') {
-                    if (el.disabled || el.classList.contains('disabled')) {
-                        return 'DISABLED:' + t;
-                    }
-                    el.click();
-                    return 'OK:' + t;
-                }
-            }
-            return 'NOT_FOUND';
-        })();
-        """;
-
-    private static string GetBreakInTriggerScript() => """
-        (() => {
-            const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-
-            // 1. 이미 휴게 상태인지 확인
-            const gadget = document.querySelector('.lnb_gadget.gadget_attend, .attend_card');
-            const curTag = gadget ? gadget.querySelector('.gadget_header .basic_tag .txt, .card_header .basic_tag .txt') : null;
-            if (curTag && clean(curTag.innerText) === '휴게') {
-                return 'ALREADY_BREAK';
-            }
-
-            // 2. 직접 휴게 버튼 탐색
-            let breakBtn = Array.from(document.querySelectorAll('.wrap_lnb_btn .menu_item, .select_list .menu_item, .list_menu button, .attend_btn button'))
-                .find(el => {
-                    const t = clean(el.innerText);
-                    return t === '휴게' || t.startsWith('휴게');
-                });
-
-            // 3. 버튼이 없으면 '근무상태변경' 드롭다운 버튼 클릭
-            if (!breakBtn) {
-                const triggerBtn = document.querySelector('.wrap_lnb_btn button, .attend_btn .wrap_lnb_btn button');
-                if (triggerBtn) {
-                    triggerBtn.click();
-                }
-                breakBtn = Array.from(document.querySelectorAll('.wrap_lnb_btn .menu_item, .select_list .menu_item, .list_menu button, .attend_btn button'))
-                    .find(el => {
-                        const t = clean(el.innerText);
-                        return t === '휴게' || t.startsWith('휴게');
-                    });
-            }
-
-            if (breakBtn) {
-                if (breakBtn.disabled) return 'DISABLED:휴게';
-                breakBtn.click();
-                return 'OK:BREAK_CLICKED';
-            }
-
-            return 'NOT_FOUND:BREAK_BTN';
-        })();
-        """;
-
-    private static string GetBreakOutTriggerScript() => """
-        (() => {
-            const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-
-            // 1. 이미 업무/근무중 상태인지 확인
-            const gadget = document.querySelector('.lnb_gadget.gadget_attend, .attend_card');
-            const curTag = gadget ? gadget.querySelector('.gadget_header .basic_tag .txt, .card_header .basic_tag .txt') : null;
-            if (curTag && (clean(curTag.innerText) === '업무' || clean(curTag.innerText) === '근무중')) {
-                return 'ALREADY_WORKING';
-            }
-
-            // 2. 직접 복귀 버튼이 있는 경우
-            const directBtns = Array.from(document.querySelectorAll('.attend_btn button, .lnb_gadget button, button'));
-            for (const btn of directBtns) {
-                const t = clean(btn.innerText);
-                if (t === '업무복귀' || t === '업무 시작' || t === '근무재개' || t === '업무재개' || t === '복귀') {
-                    if (!btn.disabled) {
-                        btn.click();
-                        return 'OK:DIRECT_RETURN:' + t;
-                    }
-                }
-            }
-
-            // 3. '근무상태변경' 드롭다운 버튼 클릭
-            const changeBtn = document.querySelector('.wrap_lnb_btn button, .attend_btn .wrap_lnb_btn button');
-            if (changeBtn) {
-                changeBtn.click();
-            }
-
-            // 4. '업무' 메뉴 아이템 찾기
-            const items = Array.from(document.querySelectorAll('.wrap_lnb_btn .menu_item, .select_list .menu_item, .list_menu button, .attend_btn button'));
-            const workItem = items.find(el => {
-                const t = clean(el.innerText);
-                return t === '업무' || t.startsWith('업무') || t === '정상근무' || t.includes('복귀');
-            });
-
-            if (workItem) {
-                if (workItem.disabled) return 'DISABLED:업무';
-                workItem.click();
-                return 'OK:WORK_CLICKED';
-            }
-
-            return 'NOT_FOUND:WORK_BTN';
-        })();
-        """;
-
-    private static string GetConfirmModalClickScript() => """
-        (() => {
-            const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-
-            // 1. 다우오피스 EHR React 다이얼로그 (.dop_dialog.open) 및 모달 처리
-            const dopDialog = document.querySelector('.dop_dialog.open, .dop_dialog, [role="dialog"], #settings-modal, .go_popup');
-            if (dopDialog) {
-                const radios = Array.from(dopDialog.querySelectorAll('.dop_radio input[type="radio"], input[type="radio"]'));
-                if (radios.length > 0 && !radios.some(r => r.checked)) {
-                    radios[0].click();
-                }
-
-                const majorBtn = dopDialog.querySelector('.popup_btn_area button.solid.major, button.solid.major, .btn_major, .btn_major_s');
-                if (majorBtn && !majorBtn.disabled) {
-                    majorBtn.click();
-                    try { majorBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); } catch {}
-                    return 'CONFIRMED:DOP_DIALOG';
-                }
-
-                const btns = Array.from(dopDialog.querySelectorAll('.popup_btn_area button, button, a.btn'));
-                for (const btn of btns) {
-                    const t = clean(btn.innerText);
-                    if ((t === '확인' || t === '예' || t === '변경' || t === '출근' || t === '퇴근' || t === '휴게' || t === '업무') && !btn.disabled) {
-                        btn.click();
-                        try { btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); } catch {}
-                        return 'CONFIRMED:' + t;
-                    }
-                }
-            }
-
-            // 2. 레거시 다우오피스 팝업 처리
-            const modalBtns = Array.from(document.querySelectorAll('.go_popup button, .go_popup a.btn_major_s, .modal button, .layer_normal a.btn_major_s, button.btn_major, a.btn_major'));
-            for (const btn of modalBtns) {
-                const t = clean(btn.innerText);
-                if (t === '확인' || t === '예' || t === '변경' || t === '출근' || t === '퇴근' || t === '휴게' || t === '업무') {
-                    btn.click();
-                    return 'CONFIRMED';
-                }
-            }
-            return 'NO_MODAL';
-        })();
-        """;
+    public static bool IsAttendanceCapableUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url) || IsLoginUrl(url))
+            return false;
+
+        return url.Contains("/ehr/", StringComparison.OrdinalIgnoreCase) ||
+               url.Contains("/home", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public void Dispose()
+    {
+        _bridge.Dispose();
+    }
 }
