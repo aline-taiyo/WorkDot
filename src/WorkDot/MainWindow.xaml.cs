@@ -1216,8 +1216,9 @@ public partial class MainWindow : Window
 
     private void OpenPortalWindow()
     {
-        if (_portalWindow == null || !_portalWindow.IsLoaded)
+        if (_portalWindow == null || !_portalWindow.IsLoaded || !_portalWindow.IsVisible)
         {
+            try { _portalWindow?.ShutdownClose(); } catch { }
             _portalWindow = new AttendanceWebWindow(_attendanceService);
         }
         _portalWindow.ShowInteractive();
@@ -1227,17 +1228,13 @@ public partial class MainWindow : Window
     {
         Dispatcher.Invoke(() =>
         {
-            if (_portalWindow == null || !_portalWindow.IsLoaded)
-            {
-                _portalWindow = new AttendanceWebWindow(_attendanceService);
-            }
-            if (_portalWindow.IsVisible && _portalWindow.IsActive)
+            if (_portalWindow != null && _portalWindow.IsLoaded && _portalWindow.IsVisible && _portalWindow.IsActive)
             {
                 _portalWindow.Close();
             }
             else
             {
-                _portalWindow.ShowInteractive();
+                OpenPortalWindow();
             }
         });
     }

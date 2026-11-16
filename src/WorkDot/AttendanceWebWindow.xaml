@@ -106,6 +106,8 @@
         </Border>
 
         <!-- WebView2 Content -->
-        <wv2:WebView2 x:Name="PortalWebView" Grid.Row="1" DefaultBackgroundColor="White"/>
+        <Border x:Name="WebViewHostContainer" Grid.Row="1" Background="#FFFFFF">
+            <wv2:WebView2 x:Name="PortalWebView" DefaultBackgroundColor="White"/>
+        </Border>
     </Grid>
 </Window>

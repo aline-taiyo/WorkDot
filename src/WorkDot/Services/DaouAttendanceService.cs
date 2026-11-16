@@ -420,33 +420,58 @@ public sealed class DaouAttendanceService
     private string SavedCredentialsFilePath =>
         Path.Combine(AppDataFolder, "auth-credentials.dat");
 
+    /// <summary>
+    /// WebView2 렌더러/GPU/브라우저 프로세스 사망 또는 장기 유휴 후 검은 화면 복구를 위해
+    /// 호스트 창(AttendanceWebWindow)에서 새 WebView2 컨트롤로 교체·재초기화하는 콜백입니다.
+    /// </summary>
+    public Func<string?, Task>? RebuildWebViewHandler { get; set; }
+
     public async Task<CoreWebView2Environment> GetOrCreateEnvironmentAsync()
     {
         if (_env != null)
             return _env;
 
         Directory.CreateDirectory(UserDataFolder);
-        _env = await CoreWebView2Environment.CreateAsync(null, UserDataFolder);
+        var env = await CoreWebView2Environment.CreateAsync(null, UserDataFolder);
+        env.BrowserProcessExited += (_, _) =>
+        {
+            if (ReferenceEquals(_env, env))
+            {
+                _env = null;
+            }
+        };
+        _env = env;
         return _env;
     }
 
-    public async Task InitializeWebViewAsync(WebView2 webView)
+    public async Task InitializeWebViewAsync(WebView2 webView, bool forceReinitialize = false, string? initialUrl = null)
     {
-        if (_isInitialized)
+        if (_isInitialized && !forceReinitialize && ReferenceEquals(_webView, webView) && _webView?.CoreWebView2 != null)
             return;
 
         _webView = webView;
         var env = await GetOrCreateEnvironmentAsync();
-        await _webView.EnsureCoreWebView2Async(env);
+        try
+        {
+            await _webView.EnsureCoreWebView2Async(env);
+        }
+        catch
+        {
+            // 장시간 유휴 후 브라우저 프로세스 종료 또는 WebView2 런타임 자동 업데이트로 기존 Environment가 무효화된 경우 재생성
+            _env = null;
+            env = await GetOrCreateEnvironmentAsync();
+            await _webView.EnsureCoreWebView2Async(env);
+        }
 
-        // 1. 앱 시작 시 저장된 다우오피스 세션 쿠키(GOSSOcookie 등)를 먼저 복원하여 재로그인 방지
+        // 1. 저장된 다우오피스 세션 쿠키(GOSSOcookie 등)를 먼저 복원하여 재로그인 방지
         await RestoreSessionCookiesAsync(_webView.CoreWebView2);
 
         // 2. 실시간 API/DOM 훅 및 자동 로그인 캡처 장착
         await AttachWebViewHooksAsync(_webView.CoreWebView2);
 
         _isInitialized = true;
-        _webView.Source = new Uri(TargetAttendanceUrl);
+        string target = !string.IsNullOrWhiteSpace(initialUrl) ? initialUrl : TargetAttendanceUrl;
+        _webView.Source = new Uri(target);
     }
 
     private async Task AttachWebViewHooksAsync(CoreWebView2 coreWebView)
@@ -473,12 +498,26 @@ public sealed class DaouAttendanceService
         {
             try
             {
-                // 렌더 프로세스 종료, 응답 없음, GPU 프로세스 실패 등으로 검은 화면이 되었을 때 자동 복구
-                if (args.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessExited ||
-                    args.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessUnresponsive ||
-                    args.ProcessFailedKind == CoreWebView2ProcessFailedKind.FrameRenderProcessExited)
+                if (args.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
                 {
-                    await Task.Delay(300);
+                    _env = null;
+                }
+
+                string? lastUrl = null;
+                try { lastUrl = coreWebView.Source; } catch { }
+
+                await Task.Delay(300);
+
+                // 렌더/GPU/브라우저 프로세스 실패 시 컨트롤 자체를 새로 교체하여 검은 화면(합성 표면 유실) 완전 복구
+                if (RebuildWebViewHandler != null && System.Windows.Application.Current?.Dispatcher != null)
+                {
+                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(async () =>
+                    {
+                        await RebuildWebViewHandler(lastUrl);
+                    });
+                }
+                else
+                {
                     coreWebView.Reload();
                 }
             }
@@ -1039,10 +1078,35 @@ public sealed class DaouAttendanceService
     /// </summary>
     private async Task<bool> EnsureFreshAttendancePageForUserActionAsync()
     {
+        _isUserActionLoginAllowed = true;
+
+        // 장시간 유휴 후 백그라운드 WebView2 프로세스가 죽었거나 응답이 없는 경우 새 WebView2 컨트롤로 재구축
+        bool isWebViewAlive = false;
+        if (_webView?.CoreWebView2 != null)
+        {
+            try
+            {
+                var pingTask = _webView.CoreWebView2.ExecuteScriptAsync("1");
+                if (await Task.WhenAny(pingTask, Task.Delay(700)) == pingTask)
+                {
+                    await pingTask;
+                    isWebViewAlive = true;
+                }
+            }
+            catch
+            {
+                isWebViewAlive = false;
+            }
+        }
+
+        if (!isWebViewAlive && RebuildWebViewHandler != null)
+        {
+            await RebuildWebViewHandler(TargetAttendanceUrl);
+            await Task.Delay(1800);
+        }
+
         if (_webView?.CoreWebView2 == null)
             return false;
-
-        _isUserActionLoginAllowed = true;
 
         string currentUrl = _webView.CoreWebView2.Source ?? string.Empty;
         bool needsNavigation = IsLoginUrl(currentUrl) || !IsAttendanceCapableUrl(currentUrl);

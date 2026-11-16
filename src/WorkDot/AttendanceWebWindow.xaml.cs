@@ -1,8 +1,10 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
+using Microsoft.Web.WebView2.Wpf;
 using WorkDot.Services;
 
 namespace WorkDot;
@@ -14,14 +16,20 @@ public partial class AttendanceWebWindow : Window
 
     private readonly DaouAttendanceService _attendanceService;
     private readonly TaskCompletionSource<bool> _initTcs = new();
+    private readonly SemaphoreSlim _webViewLock = new(1, 1);
+    private WebView2 _currentWebView;
     private bool _isAppShuttingDown;
     private bool _isWebViewInitialized;
     private bool _isInteractiveRequested;
+    private bool _needsFreshWebViewOnShow;
 
     public AttendanceWebWindow(DaouAttendanceService attendanceService)
     {
         InitializeComponent();
         _attendanceService = attendanceService;
+        _currentWebView = PortalWebView;
+        _attendanceService.RebuildWebViewHandler = RebuildWebViewAsync;
+
         Closing += OnWindowClosing;
         SourceInitialized += (_, _) =>
         {
@@ -35,9 +43,13 @@ public partial class AttendanceWebWindow : Window
         };
         IsVisibleChanged += (_, _) =>
         {
-            // 창이 숨겨지면(닫기·동기화 후 닫기 등) 백그라운드 동기화 모드로 돌아간다
+            // 창이 숨겨지면(닫기·동기화 후 닫기 등) 백그라운드 동기화 모드로 돌아가고,
+            // 다음에 다시 열 때는 검은 화면(장시간 숨김 후 DirectComposition 표면 유실) 방지를 위해 새 WebView2 컨트롤로 교체한다.
             if (!IsVisible)
+            {
                 _attendanceService.IsInteractiveBrowsing = false;
+                _needsFreshWebViewOnShow = true;
+            }
         };
     }
 
@@ -60,6 +72,7 @@ public partial class AttendanceWebWindow : Window
 
         if (!_isInteractiveRequested)
         {
+            _needsFreshWebViewOnShow = true;
             Hide();
         }
     }
@@ -67,6 +80,7 @@ public partial class AttendanceWebWindow : Window
     public async void ShowInteractive()
     {
         _isInteractiveRequested = true;
+        bool wasVisible = IsVisible;
 
         var workArea = SystemParameters.WorkArea;
         if (Left < -1000 || Top < -1000 || double.IsNaN(Left) || double.IsNaN(Top))
@@ -92,32 +106,28 @@ public partial class AttendanceWebWindow : Window
 
         _attendanceService.IsInteractiveBrowsing = true;
 
-        await EnsureWebViewReadyAsync();
-
-        // 브라우저 창을 열었을 때 웹뷰가 검은 화면(크래시 또는 멈춤) 상태인지 헬스체크하고 필요 시 즉각 복구
-        if (PortalWebView.CoreWebView2 != null)
+        // 숨겨져 있던 창을 열거나 오랫동안 시간이 지난 뒤 열 때는
+        // 화면에 창이 정상 표시된 상태에서 새 WebView2 컨트롤을 생성해 검은 화면(HwndHost/GPU 표면 유실)을 원천 차단한다.
+        if (!wasVisible || _needsFreshWebViewOnShow || _currentWebView?.CoreWebView2 == null)
         {
-            try
-            {
-                var task = PortalWebView.CoreWebView2.ExecuteScriptAsync("1");
-                if (await Task.WhenAny(task, Task.Delay(500)) != task)
-                {
-                    PortalWebView.CoreWebView2.Reload();
-                }
-            }
-            catch
-            {
-                try { PortalWebView.CoreWebView2.Reload(); } catch { }
-            }
-
-            await _attendanceService.OnPortalShownInteractiveAsync();
+            _needsFreshWebViewOnShow = false;
+            await RebuildWebViewAsync(DaouAttendanceService.TargetAttendanceUrl);
         }
+        else if (!await IsCurrentWebViewHealthyAsync())
+        {
+            string? lastUrl = null;
+            try { lastUrl = _currentWebView.CoreWebView2?.Source; } catch { }
+            await RebuildWebViewAsync(lastUrl);
+        }
+
+        await _attendanceService.OnPortalShownInteractiveAsync();
     }
 
     public void ShutdownClose()
     {
         _isAppShuttingDown = true;
-        Close();
+        try { _currentWebView?.Dispose(); } catch { }
+        try { Close(); } catch { }
     }
 
     private void OnTitleBarMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -134,6 +144,44 @@ public partial class AttendanceWebWindow : Window
         }
     }
 
+    private async Task<bool> IsCurrentWebViewHealthyAsync()
+    {
+        if (_currentWebView?.CoreWebView2 == null)
+            return false;
+
+        try
+        {
+            var task = _currentWebView.CoreWebView2.ExecuteScriptAsync("document.body ? 1 : 0");
+            if (await Task.WhenAny(task, Task.Delay(500)) != task)
+                return false;
+
+            string res = await task;
+            return res == "1";
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void AttachUrlSync(WebView2 webView)
+    {
+        if (webView.CoreWebView2 != null)
+        {
+            webView.CoreWebView2.SourceChanged += (_, _) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    try
+                    {
+                        UrlText.Text = webView.CoreWebView2?.Source ?? string.Empty;
+                    }
+                    catch { }
+                });
+            };
+        }
+    }
+
     private async Task EnsureWebViewReadyAsync()
     {
         if (_isWebViewInitialized)
@@ -142,27 +190,68 @@ public partial class AttendanceWebWindow : Window
             return;
         }
 
-        _isWebViewInitialized = true;
+        await _webViewLock.WaitAsync();
         try
         {
-            await _attendanceService.InitializeWebViewAsync(PortalWebView);
+            if (_isWebViewInitialized)
+                return;
 
-            if (PortalWebView.CoreWebView2 != null)
-            {
-                PortalWebView.CoreWebView2.SourceChanged += (_, _) =>
-                {
-                    Dispatcher.Invoke(() =>
-                    {
-                        UrlText.Text = PortalWebView.CoreWebView2.Source ?? string.Empty;
-                    });
-                };
-            }
+            _isWebViewInitialized = true;
+            await _attendanceService.InitializeWebViewAsync(_currentWebView);
+            AttachUrlSync(_currentWebView);
             _initTcs.TrySetResult(true);
         }
         catch (Exception ex)
         {
             _initTcs.TrySetException(ex);
             throw;
+        }
+        finally
+        {
+            _webViewLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// 기존 WebView2 컨트롤을 폐기하고 새 WebView2 인스턴스를 생성하여 교체합니다.
+    /// 장시간 유휴 후 GPU/렌더러/DirectComposition 표면이 소실되어 검은 화면이 된 경우에도 앱 재시작 없이 즉시 복구됩니다.
+    /// </summary>
+    public async Task RebuildWebViewAsync(string? targetUrl = null)
+    {
+        await _webViewLock.WaitAsync();
+        try
+        {
+            string navUrl = !string.IsNullOrWhiteSpace(targetUrl) && !targetUrl.StartsWith("about:", StringComparison.OrdinalIgnoreCase)
+                ? targetUrl
+                : DaouAttendanceService.TargetAttendanceUrl;
+
+            var oldWebView = _currentWebView;
+            var newWebView = new WebView2
+            {
+                DefaultBackgroundColor = System.Drawing.Color.White
+            };
+
+            _currentWebView = newWebView;
+            WebViewHostContainer.Child = newWebView;
+
+            if (oldWebView != null)
+            {
+                try { oldWebView.Dispose(); } catch { }
+            }
+
+            _isWebViewInitialized = true;
+            await _attendanceService.InitializeWebViewAsync(newWebView, forceReinitialize: true, initialUrl: navUrl);
+            AttachUrlSync(newWebView);
+            UrlText.Text = newWebView.CoreWebView2?.Source ?? navUrl;
+            _initTcs.TrySetResult(true);
+        }
+        catch
+        {
+            // Ignore transient rebuild errors
+        }
+        finally
+        {
+            _webViewLock.Release();
         }
     }
 
@@ -184,9 +273,9 @@ public partial class AttendanceWebWindow : Window
         ShowInTaskbar = false;
         Hide();
 
-        if (PortalWebView.CoreWebView2 != null)
+        if (_currentWebView?.CoreWebView2 != null)
         {
-            await _attendanceService.ProbeDomAndApiStatusAsync(PortalWebView.CoreWebView2);
+            await _attendanceService.ProbeDomAndApiStatusAsync(_currentWebView.CoreWebView2);
         }
 
         await _attendanceService.RefreshStatusAsync();
@@ -194,35 +283,40 @@ public partial class AttendanceWebWindow : Window
 
     private void OnBackClick(object sender, RoutedEventArgs e)
     {
-        if (PortalWebView.CoreWebView2?.CanGoBack == true)
+        if (_currentWebView?.CoreWebView2?.CanGoBack == true)
         {
-            PortalWebView.CoreWebView2.GoBack();
+            _currentWebView.CoreWebView2.GoBack();
         }
     }
 
     private void OnForwardClick(object sender, RoutedEventArgs e)
     {
-        if (PortalWebView.CoreWebView2?.CanGoForward == true)
+        if (_currentWebView?.CoreWebView2?.CanGoForward == true)
         {
-            PortalWebView.CoreWebView2.GoForward();
+            _currentWebView.CoreWebView2.GoForward();
         }
     }
 
-    private void OnReloadClick(object sender, RoutedEventArgs e)
+    private async void OnReloadClick(object sender, RoutedEventArgs e)
     {
+        string? currentUrl = null;
         try
         {
-            PortalWebView.CoreWebView2?.Reload();
+            currentUrl = _currentWebView?.CoreWebView2?.Source;
         }
-        catch
+        catch { }
+
+        if (string.IsNullOrWhiteSpace(currentUrl) || currentUrl.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
         {
-            try { PortalWebView.Reload(); } catch { }
+            currentUrl = (UrlText.Text ?? string.Empty).Trim();
         }
+
+        await RebuildWebViewAsync(currentUrl);
     }
 
-    private void OnUrlTextKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    private async void OnUrlTextKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || PortalWebView.CoreWebView2 == null)
+        if (e.Key != Key.Enter)
             return;
 
         string target = (UrlText.Text ?? string.Empty).Trim();
@@ -235,44 +329,23 @@ public partial class AttendanceWebWindow : Window
             target = "https://" + target;
         }
 
-        try
+        e.Handled = true;
+
+        if (await IsCurrentWebViewHealthyAsync())
         {
-            PortalWebView.CoreWebView2.Navigate(target);
-            e.Handled = true;
+            try
+            {
+                _currentWebView.CoreWebView2!.Navigate(target);
+                return;
+            }
+            catch { }
         }
-        catch
-        {
-            // Ignore invalid URL navigation errors
-        }
+
+        await RebuildWebViewAsync(target);
     }
 
     private async void OnGoHomeClick(object sender, RoutedEventArgs e)
     {
-        if (PortalWebView.CoreWebView2 == null)
-            return;
-
-        try
-        {
-            // 화면을 가로막는 딤 레이어 정리
-            await PortalWebView.CoreWebView2.ExecuteScriptAsync("""
-                (() => {
-                    document.querySelectorAll('.layer_dimm, .dimm, .backdrop, [class*="dimm"]').forEach(el => el.remove());
-                })();
-            """);
-
-            string current = PortalWebView.CoreWebView2.Source ?? string.Empty;
-            if (current.Contains("/ehr/app/attend", StringComparison.OrdinalIgnoreCase))
-            {
-                PortalWebView.CoreWebView2.Reload();
-            }
-            else
-            {
-                PortalWebView.CoreWebView2.Navigate(DaouAttendanceService.TargetAttendanceUrl);
-            }
-        }
-        catch
-        {
-            try { PortalWebView.CoreWebView2.Reload(); } catch { }
-        }
+        await RebuildWebViewAsync(DaouAttendanceService.TargetAttendanceUrl);
     }
 }

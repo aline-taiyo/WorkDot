@@ -4,6 +4,16 @@ WorkDot의 모든 주요 변경 사항 및 버전별 릴리즈 노트입니다.
 
 ---
 
+## [v1.5.22] - 2026-11-16
+
+### 🐛 버그 수정 (Bug Fixes)
+- **장시간 유휴 후 다우오피스 브라우저 창을 열었을 때 검은 화면(렌더링 불능)이 지속되는 버그 수정**:
+  - **원인**: 앱 시작 시 화면 밖(`-32000, -32000`, `Opacity=0`)에서 생성된 뒤 장시간 `Hide()` 상태로 숨겨져 있던 `AttendanceWebWindow` 및 `WebView2`(`HwndHost`) 컨트롤이 모니터 절전·잠금·GPU 리셋·백그라운드 프로세스 종료를 거치면서 DirectComposition 렌더링 표면과 컨트롤러가 무효화되었고, 이 상태에서는 기존 죽은 컨트롤에 `Reload()`나 `Navigate()`를 호출해도 검은 화면이 복구되지 않았습니다.
+  - **창 오픈 시 새 윈도우 및 새 WebView2 인스턴스 생성**: 숨겨져 있던 다우오피스 창을 다시 열 때([`MainWindow.OpenPortalWindow`](file:///d:/work/workdot/src/WorkDot/MainWindow.xaml.cs#L1217-L1225), [`AttendanceWebWindow.ShowInteractive`](file:///d:/work/workdot/src/WorkDot/AttendanceWebWindow.xaml.cs#L80-L125)) 기존 백그라운드 윈도우/컨트롤을 폐기하고 정상 화면 좌표에서 새 `AttendanceWebWindow` 및 새 `WebView2` 컨트롤([`RebuildWebViewAsync`](file:///d:/work/workdot/src/WorkDot/AttendanceWebWindow.xaml.cs#L218-L255))을 생성하여 앱을 재시작한 것과 동일하게 항상 깨끗하게 렌더링되도록 수정했습니다.
+  - **`새로고침` / `홈` / `URL Enter` 시 WebView2 컨트롤 자체 재구축 지원**: 창이 열린 상태에서 새로고침([`OnReloadClick`](file:///d:/work/workdot/src/WorkDot/AttendanceWebWindow.xaml.cs#L298-L313))이나 홈([`OnGoHomeClick`](file:///d:/work/workdot/src/WorkDot/AttendanceWebWindow.xaml.cs#L345-L348)) 버튼을 누르면 단순 페이지 리로드 대신 새 `WebView2` 컨트롤로 교체·초기화하며, `BrowserProcessExited` 감지 시 `CoreWebView2Environment`도 자동으로 재생성([`GetOrCreateEnvironmentAsync`](file:///d:/work/workdot/src/WorkDot/Services/DaouAttendanceService.cs#L429-L445))합니다.
+
+---
+
 ## [v1.5.21] - 2026-11-09
 
 ### 🚀 신규 기능 및 개선 (Features & Improvements)
