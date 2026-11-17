@@ -234,14 +234,16 @@ public sealed class ChromeExtensionBridgeService : IDisposable
                     path.Equals("/api/command", StringComparison.OrdinalIgnoreCase))
                 {
                     MarkExtensionSeen();
+                    string appVersion = AppSettingsService.AppVersion.TrimStart('v', 'V');
                     if (_commandQueue.TryDequeue(out BridgeCommand? cmd))
                     {
-                        string json = JsonSerializer.Serialize(new { id = cmd.Id, action = cmd.Action });
+                        string json = JsonSerializer.Serialize(new { id = cmd.Id, action = cmd.Action, version = appVersion });
                         await WriteHttpResponseAsync(stream, 200, "OK", json);
                     }
                     else
                     {
-                        await WriteHttpResponseAsync(stream, 200, "OK", "{\"id\":null,\"action\":\"NONE\"}");
+                        string json = JsonSerializer.Serialize(new { id = (string?)null, action = "NONE", version = appVersion });
+                        await WriteHttpResponseAsync(stream, 200, "OK", json);
                     }
                     return;
                 }

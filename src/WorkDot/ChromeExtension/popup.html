@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WorkDot</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      width: 248px;
+      background-color: #09090b;
+      color: #fafafa;
+      font-family: "Pretendard", "Segoe UI", "Malgun Gothic", sans-serif;
+      border: 1px solid #27272a;
+      user-select: none;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      background-color: #09090b;
+      border-bottom: 1px solid #27272a;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+    }
+
+    .brand img {
+      width: 22px;
+      height: 22px;
+      border-radius: 6px;
+      flex-shrink: 0;
+    }
+
+    .brand-info {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .app-name {
+      font-size: 13.5px;
+      font-weight: 700;
+      color: #fafafa;
+      letter-spacing: -0.01em;
+    }
+
+    .version-badge {
+      font-size: 11px;
+      font-weight: 600;
+      color: #a1a1aa;
+      background-color: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 5px;
+      padding: 1px 6px;
+      font-family: "Cascadia Mono", "Consolas", monospace;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background-color: #71717a;
+      flex-shrink: 0;
+    }
+
+    .status-dot.connected {
+      background-color: #10b981;
+      box-shadow: 0 0 6px rgba(16, 185, 129, 0.65);
+    }
+
+    .status-dot.disconnected {
+      background-color: #f59e0b;
+      box-shadow: 0 0 6px rgba(245, 158, 11, 0.55);
+    }
+
+    .menu {
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .menu-btn {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 10px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background-color: transparent;
+      color: #fafafa;
+      cursor: pointer;
+      text-align: left;
+      transition: background-color 0.12s ease, border-color 0.12s ease;
+    }
+
+    .menu-btn:hover {
+      background-color: #18181b;
+      border-color: #27272a;
+    }
+
+    .menu-btn:active {
+      background-color: #27272a;
+    }
+
+    .menu-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      background-color: #121215;
+      border: 1px solid #27272a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: #a1a1aa;
+    }
+
+    .menu-btn:hover .menu-icon {
+      color: #fafafa;
+      border-color: #3f3f46;
+    }
+
+    .menu-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .menu-title {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: #fafafa;
+      line-height: 1.2;
+    }
+
+    .menu-sub {
+      font-size: 11px;
+      color: #71717a;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .menu-sub.highlight {
+      color: #10b981;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <img src="icon.png" alt="WorkDot" />
+      <div class="brand-info">
+        <span class="app-name" id="app-name">WorkDot</span>
+        <span class="version-badge" id="app-version">v2.0.2</span>
+      </div>
+    </div>
+    <span class="status-dot" id="bridge-dot" title="위젯 연결 상태 확인 중"></span>
+  </div>
+
+  <div class="menu">
+    <button type="button" class="menu-btn" id="btn-open-daou">
+      <div class="menu-icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+          <polyline points="9 22 9 12 15 12 15 22"/>
+        </svg>
+      </div>
+      <div class="menu-text">
+        <span class="menu-title">다우오피스</span>
+        <span class="menu-sub">근태 페이지 열기</span>
+      </div>
+    </button>
+
+    <button type="button" class="menu-btn" id="btn-update-version">
+      <div class="menu-icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"/>
+          <polyline points="1 20 1 14 7 14"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+      </div>
+      <div class="menu-text">
+        <span class="menu-title">버전 업데이트</span>
+        <span class="menu-sub" id="update-sub">확장프로그램 리로드</span>
+      </div>
+    </button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

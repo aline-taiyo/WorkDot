@@ -10,7 +10,9 @@ let activePort = BRIDGE_PORTS[0];
 let pollTimer = null;
 let isPolling = false;
 let isSyncing = false;
+let isReloading = false;
 let hasSyncedValidStatus = false;
+let lastBridgeAppVersion = null;
 let lastSyncTs = 0;
 let lastKeepaliveTs = 0;
 let wasBridgeDisconnected = true;
@@ -347,7 +349,7 @@ async function focusTab(tab) {
   } catch {}
 }
 
-async function handleOpenPortal(cmd) {
+async function openOrFocusDaouTab() {
   const tabs = await queryDaouTabs();
   const targetTab =
     tabs.find((t) => (t.url || '').includes('/ehr/app/attend')) ||
@@ -364,6 +366,10 @@ async function handleOpenPortal(cmd) {
       } catch {}
     }
   }
+}
+
+async function handleOpenPortal(cmd) {
+  await openOrFocusDaouTab();
 
   await postCommandResult({
     id: cmd.id,
@@ -519,8 +525,18 @@ async function pollCommandOnce() {
       }
 
       const cmd = await res.json();
+      if (cmd && typeof cmd.version === 'string' && cmd.version) {
+        lastBridgeAppVersion = cmd.version;
+      }
       if (cmd && cmd.action && cmd.action !== 'NONE') {
         await handleCommand(cmd);
+      } else if (lastBridgeAppVersion) {
+        const currentVersion = chrome.runtime.getManifest()?.version;
+        if (currentVersion && lastBridgeAppVersion !== currentVersion && !isReloading) {
+          isReloading = true;
+          chrome.runtime.reload();
+          return;
+        }
       }
     }
   } catch {
@@ -576,6 +592,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'WORKDOT_PROBE' && msg.payload) {
     ensurePollingLoop();
     postProbe(msg.payload).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (msg?.type === 'WORKDOT_GET_STATUS') {
+    sendResponse({
+      connected: !wasBridgeDisconnected,
+      appVersion: lastBridgeAppVersion
+    });
+    return false;
+  }
+  if (msg?.type === 'WORKDOT_OPEN_DAOU') {
+    openOrFocusDaouTab().then(() => sendResponse({ ok: true }));
     return true;
   }
   return false;
