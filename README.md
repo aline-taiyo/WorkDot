@@ -2,7 +2,7 @@
 
 다우오피스(DaouOffice) 근태 현황을 실시간으로 동기화하고 화면 경계에 깔끔하게 고정해 사용하는 Windows 미니 오버레이 위젯입니다.
 
-- **최신 버전**: `v1.6.1`
+- **최신 버전**: `v2.0.0`
 - **저장소**: https://github.com/aline-taiyo/WorkDot
 - **최신 릴리즈 설치 파일(`WorkDot-Setup-win-x64.msi`)**: https://github.com/aline-taiyo/WorkDot/releases/latest
 
