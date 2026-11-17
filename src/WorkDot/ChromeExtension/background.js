@@ -1,8 +1,8 @@
 const DAOU_ORIGIN = 'https://alinestudio.daouoffice.com';
 const TARGET_ATTENDANCE_URL = `${DAOU_ORIGIN}/ehr/app/attend/my-attendance-status`;
 const GADGET_TODAY_API = `${DAOU_ORIGIN}/api/attend/normal/gadget/today`;
-const BRIDGE_PORTS = [49812, 49813];
-const POLL_COMMAND_MS = 1500;
+const BRIDGE_PORTS = [49812];
+const POLL_COMMAND_MS = 2000;
 const SYNC_INTERVAL_MS = 15000;
 const KEEPALIVE_INTERVAL_MS = 20000;
 

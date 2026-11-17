@@ -570,51 +570,10 @@ public sealed class DaouAttendanceService : IDisposable
                 return;
 
             using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            bool isLogin = root.TryGetProperty("isLoginPage", out var lp) && lp.GetBoolean();
-            if (isLogin)
+            if (doc.RootElement.TryGetProperty("isLoginPage", out var lp) && lp.GetBoolean())
                 return;
 
-            string state = root.TryGetProperty("state", out var sProp) ? (sProp.GetString() ?? "") : "";
-            string? clockIn = TryNormalizeClockTimeText(root.TryGetProperty("clockIn", out var inProp) ? inProp.GetString() : null);
-            string? clockOut = TryNormalizeClockTimeText(root.TryGetProperty("clockOut", out var outProp) ? outProp.GetString() : null);
-            string? duration = root.TryGetProperty("duration", out var durProp) ? durProp.GetString() : null;
-
-            if (state == "WORKING" && !string.IsNullOrWhiteSpace(clockIn))
-            {
-                CurrentSnapshot = new AttendanceSnapshot(
-                    WorkStatusKind.Working,
-                    "근무중",
-                    $"출근 {clockIn}" + (!string.IsNullOrWhiteSpace(duration) ? $" · {duration}" : ""),
-                    clockIn,
-                    clockOut,
-                    duration,
-                    DateTime.Now);
-            }
-            else if (state == "BREAK")
-            {
-                CurrentSnapshot = new AttendanceSnapshot(
-                    WorkStatusKind.Break,
-                    "휴게",
-                    "휴게중",
-                    clockIn,
-                    clockOut,
-                    duration,
-                    DateTime.Now);
-            }
-            else if (state == "OFF_WORK")
-            {
-                string sub = !string.IsNullOrWhiteSpace(clockOut) ? $"퇴근 {clockOut}" : "출근 전";
-                CurrentSnapshot = new AttendanceSnapshot(
-                    WorkStatusKind.OffWork,
-                    "퇴근",
-                    sub,
-                    clockIn,
-                    clockOut,
-                    duration,
-                    DateTime.Now);
-            }
+            ProcessWebMessageJson(json, persistCache: false);
         }
         catch
         {
@@ -711,21 +670,24 @@ public sealed class DaouAttendanceService : IDisposable
         return NormalizeAndMergeBreakWindows(combined);
     }
 
-    public void ProcessWebMessageJson(string innerJson)
+    public void ProcessWebMessageJson(string innerJson, bool persistCache = true)
     {
         try
         {
             using var doc = JsonDocument.Parse(innerJson);
             var root = doc.RootElement;
 
-            try
+            if (persistCache)
             {
-                Directory.CreateDirectory(AppDataFolder);
-                File.WriteAllText(LastProbeLogPath, innerJson);
-            }
-            catch
-            {
-                // Ignore file lock
+                try
+                {
+                    Directory.CreateDirectory(AppDataFolder);
+                    File.WriteAllText(LastProbeLogPath, innerJson);
+                }
+                catch
+                {
+                    // Ignore file lock
+                }
             }
 
             string probeUrl = root.TryGetProperty("url", out var urlProp) ? (urlProp.GetString() ?? "") : "";

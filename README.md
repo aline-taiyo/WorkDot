@@ -2,7 +2,7 @@
 
 다우오피스(DaouOffice) 근태 현황을 실시간으로 동기화하고 화면 경계에 깔끔하게 고정해 사용하는 Windows 미니 오버레이 위젯입니다.
 
-- **최신 버전**: `v1.6.0`
+- **최신 버전**: `v1.6.1`
 - **저장소**: https://github.com/aline-taiyo/WorkDot
 - **최신 릴리즈 설치 파일(`WorkDot-Setup-win-x64.msi`)**: https://github.com/aline-taiyo/WorkDot/releases/latest
 
@@ -17,7 +17,7 @@ WorkDot은 **Windows 데스크톱 미니 위젯(UI)**과 **Chrome 확장프로�
    - 설치 완료 시 바탕화면 및 시작 메뉴에 **WorkDot** 바로가기 아이콘이 생성됩니다 (`%LOCALAPPDATA%\Programs\WorkDot\WorkDot.exe`).
 2. `WorkDot`을 실행하면 화면 우측 하단(작업 표시줄 위 경계)에 미니 위젯이 표시됩니다.
    - 작업 표시줄에는 아이콘이 노출되지 않으며, **시스템 트레이(WorkDot 앱 아이콘)** 및 오버레이 위젯으로만 동작합니다.
-   - 앱 시작 시 크롬 확장프로그램 파일이 `%LOCALAPPDATA%\WorkDot\ChromeExtension` 경로에 자동 동기화되며, 로컬 브릿지(`http://127.0.0.1:49812`)가 활성화됩니다.
+   - 앱 시작 시 기존에 실행 중인 중복 WorkDot 프로세스가 있으면 자동으로 정리하여 항상 단일 인스턴스(포트 `49812`)로 안정적으로 동작하며, 크롬 확장프로그램 파일이 `%LOCALAPPDATA%\WorkDot\ChromeExtension` 경로에 자동 동기화됩니다.
 3. **크롬 확장프로그램 1회 등록**:
    - 위젯 우클릭 메뉴에서 **`크롬 확장프로그램 설치 폴더 열기`** 또는 환경설정 → **`확장프로그램 폴더 열기 (경로 복사)`**를 클릭합니다. (폴더 경로가 클립보드에 자동 복사되며 탐색기가 열립니다.)
    - Chrome 주소창에 `chrome://extensions`를 입력해 이동한 뒤 우측 상단 **`개발자 모드`**를 켭니다.

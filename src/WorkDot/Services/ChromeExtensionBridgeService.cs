@@ -22,7 +22,6 @@ public sealed record BridgeCommandResult(
 public sealed class ChromeExtensionBridgeService : IDisposable
 {
     public const int PrimaryPort = 49812;
-    public const int FallbackPort = 49813;
 
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
     private static readonly TimeSpan ConnectedWindow = TimeSpan.FromSeconds(35);
@@ -100,20 +99,24 @@ public sealed class ChromeExtensionBridgeService : IDisposable
 
         _cts = new CancellationTokenSource();
 
-        int[] ports = [PrimaryPort, FallbackPort];
-        foreach (int port in ports)
+        // 기존 프로세스 종료 직후 TIME_WAIT 상태여도 단일 포트(49812)로 즉시 재바인딩하도록 ReuseAddress + 재시도 적용
+        for (int attempt = 0; attempt < 5; attempt++)
         {
             try
             {
-                var listener = new TcpListener(IPAddress.Loopback, port);
+                var listener = new TcpListener(IPAddress.Loopback, PrimaryPort);
+                listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                 listener.Start();
                 _listener = listener;
-                ActivePort = port;
+                ActivePort = PrimaryPort;
                 break;
             }
             catch (SocketException)
             {
-                // Try fallback port
+                if (attempt < 4)
+                {
+                    Thread.Sleep(200);
+                }
             }
         }
 
