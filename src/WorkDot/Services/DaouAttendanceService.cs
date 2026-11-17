@@ -677,25 +677,22 @@ public sealed class DaouAttendanceService : IDisposable
             using var doc = JsonDocument.Parse(innerJson);
             var root = doc.RootElement;
 
-            if (persistCache)
-            {
-                try
-                {
-                    Directory.CreateDirectory(AppDataFolder);
-                    File.WriteAllText(LastProbeLogPath, innerJson);
-                }
-                catch
-                {
-                    // Ignore file lock
-                }
-            }
-
             string probeUrl = root.TryGetProperty("url", out var urlProp) ? (urlProp.GetString() ?? "") : "";
             bool isLogin = (root.TryGetProperty("isLoginPage", out var loginProp) && loginProp.GetBoolean()) ||
                            IsLoginUrl(probeUrl);
 
             if (isLogin)
             {
+                // 오늘 이미 정상 동기화된 근태 상태(근무중/휴게/퇴근)가 있는 동안 백그라운드 프로브가 일시적으로
+                // 로그인 감지를 보내더라도 기존 위젯 상태를 덮어쓰지 않고 유지한다.
+                // (명시적 유저 액션 시 실제 로그인이 필요할 때만 ExecuteBridgeActionAsync에서 NeedsLogin 전환)
+                bool hasValidTodayStatus = CurrentSnapshot.UpdatedAt.Date == DateTime.Today &&
+                    (CurrentSnapshot.Status == WorkStatusKind.Working ||
+                     CurrentSnapshot.Status == WorkStatusKind.Break ||
+                     CurrentSnapshot.Status == WorkStatusKind.OffWork);
+                if (hasValidTodayStatus)
+                    return;
+
                 UpdateSnapshot(new AttendanceSnapshot(
                     WorkStatusKind.NeedsLogin,
                     "로그인 필요",
@@ -710,6 +707,19 @@ public sealed class DaouAttendanceService : IDisposable
             string state = root.TryGetProperty("state", out var sProp) ? (sProp.GetString() ?? "UNKNOWN") : "UNKNOWN";
             if (state == "PAGE_OUTDATED_NEEDS_RELOAD" || state == "LOADING" || state == "UNKNOWN")
                 return;
+
+            if (persistCache)
+            {
+                try
+                {
+                    Directory.CreateDirectory(AppDataFolder);
+                    File.WriteAllText(LastProbeLogPath, innerJson);
+                }
+                catch
+                {
+                    // Ignore file lock
+                }
+            }
 
             string? clockIn = TryNormalizeClockTimeText(root.TryGetProperty("clockIn", out var inProp) ? inProp.GetString() : null);
             string? clockOut = TryNormalizeClockTimeText(root.TryGetProperty("clockOut", out var outProp) ? outProp.GetString() : null);

@@ -96,18 +96,11 @@
       urlLower.includes('sso') ||
       urlLower.includes('alliance-v2');
 
-    const hasPasswordInput = Boolean(document.querySelector('input[type="password"]'));
-    const hasOtpOrAuthInput = Boolean(
-      document.querySelector(
-        'input[name*="otp" i], input[id*="otp" i], input[name*="authCode" i], input[id*="authCode" i], input[name*="cert" i], input[id*="cert" i], input[autocomplete="one-time-code"], input[placeholder*="인증" i], input[placeholder*="OTP" i]'
-      )
-    );
-    const hasLoginBtn = Boolean(
-      document.querySelector('#login_submit, #btnLogin, .btn_login, #btn_submit, [data-role="login"]')
-    );
-
-    if (!hasEhrAttendUi && (isAuthUrl || hasPasswordInput || hasOtpOrAuthInput || hasLoginBtn)) {
-      return { isLoginPage: true, url };
+    if (!hasEhrAttendUi) {
+      if (isAuthUrl) {
+        return { isLoginPage: true, url };
+      }
+      return { isLoginPage: false, state: 'LOADING', url };
     }
 
     const timeOnlyRe = /\b([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?\b/;

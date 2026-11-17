@@ -4,6 +4,22 @@ WorkDot의 모든 주요 변경 사항 및 버전별 릴리즈 노트입니다.
 
 ---
 
+## [v2.0.1] - 2026-11-17
+
+### 🚀 개선 사항 (Improvements)
+- **크롬 확장프로그램 앱 아이콘 적용**:
+  - WorkDot 위젯 앱 아이콘(`workdot-256.png`)을 확장프로그램 아이콘(`icon.png`)으로 포함하고 `manifest.json`의 `icons` 및 `action.default_icon`에 연결하여 `chrome://extensions` 및 브라우저 툴바에서 WorkDot 아이콘이 표시되도록 개선했습니다.
+
+### 🐛 버그 수정 (Bug Fixes)
+- **로그인 후 시간이 지나면 위젯이 `근무중`에서 `로그인` 상태로 바뀌던 버그 수정**:
+  - **원인**: 다우오피스 탭이 백그라운드에서 일정 시간 유휴 상태(Chrome 메모리 절약 모드)가 되거나 다른 메뉴 화면으로 전환되었을 때, 확장프로그램(`background.js`)의 백그라운드 쿠키 조회 실패 또는 비근태 페이지 DOM 오판(`content.js`)으로 인해 `{ isLoginPage: true }`가 전달되며 위젯의 `근무중` 상태를 `로그인` 상태로 덮어쓰던 문제를 수정했습니다.
+  - **백그라운드 쿠키 조회 시 오탐 제거 (`background.js`)**: `fetchAttendanceFromCookies()`에 `X-Requested-With: XMLHttpRequest` 헤더를 추가하고, 리다이렉트·401·403 등 비정상 응답 시 `isLoginPage: true` 대신 `null`을 반환해 기존 상태를 보존하도록 수정했습니다.
+  - **다우오피스 탭 절전 방지 (`autoDiscardable: false`)**: Chrome 메모리 절약 모드가 다우오피스 탭을 백그라운드에서 절전/폐기하지 않도록 설정했습니다.
+  - **일반 페이지 DOM 오판 제거 (`content.js`)**: 근태 가젯이 아직 렌더링되지 않았거나 다른 다우오피스 메뉴에 있을 때 로그인 페이지로 오인하지 않고 `LOADING` 상태를 반환하도록 수정했습니다.
+  - **당일 유효 근태 상태 보호 (`DaouAttendanceService.ProcessWebMessageJson`)**: 오늘 이미 정상 동기화된 근태 상태(`Working`, `Break`, `OffWork`)가 유지되는 동안에는 백그라운드 프로브의 `isLoginPage` 신호로 위젯을 `NeedsLogin`으로 덮어쓰지 않고, 실제 유저 액션 실행 시 로그인이 필요할 때만 `NeedsLogin`으로 전환하도록 수정했습니다.
+
+---
+
 ## [v2.0.0] - 2026-11-17
 
 ### 🚀 신규 기능 및 아키텍처 개편 (Major Architecture Upgrade)

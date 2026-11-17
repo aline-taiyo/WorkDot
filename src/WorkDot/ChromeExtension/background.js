@@ -10,6 +10,7 @@ let activePort = BRIDGE_PORTS[0];
 let pollTimer = null;
 let isPolling = false;
 let isSyncing = false;
+let hasSyncedValidStatus = false;
 let lastSyncTs = 0;
 let lastKeepaliveTs = 0;
 let wasBridgeDisconnected = true;
@@ -161,26 +162,25 @@ async function fetchAttendanceFromCookies() {
       method: 'GET',
       credentials: 'include',
       redirect: 'manual',
-      headers: { Accept: 'application/json' }
+      headers: {
+        Accept: 'application/json',
+        'X-Requested-With': 'XMLHttpRequest'
+      }
     });
 
-    if (res.type === 'opaqueredirect' || res.status === 401 || res.status === 403) {
-      return { isLoginPage: true, url: TARGET_ATTENDANCE_URL };
-    }
-
-    if (!res.ok) {
+    if (res.type === 'opaqueredirect' || res.status === 401 || res.status === 403 || !res.ok) {
       return null;
     }
 
     const ct = (res.headers.get('content-type') || '').toLowerCase();
     if (!ct.includes('json')) {
-      return { isLoginPage: true, url: TARGET_ATTENDANCE_URL };
+      return null;
     }
 
     const json = await res.json();
     const gd = json?.data;
     if (!gd) {
-      return { isLoginPage: true, url: TARGET_ATTENDANCE_URL };
+      return null;
     }
 
     const clockIn = isoToLocalHms(gd.startWorkTime);
@@ -275,6 +275,9 @@ async function syncAttendance(forceFetch = false) {
     const attendanceTab = pickBestAttendanceTab(tabs);
 
     if (attendanceTab && attendanceTab.id != null) {
+      if (attendanceTab.autoDiscardable !== false) {
+        chrome.tabs.update(attendanceTab.id, { autoDiscardable: false }).catch(() => {});
+      }
       await ensureMainWorldHook(attendanceTab.id);
       const probe = await sendMessageToTabSafe(attendanceTab.id, {
         type: 'WORKDOT_RUN_PROBE',
@@ -283,26 +286,31 @@ async function syncAttendance(forceFetch = false) {
 
       if (
         probe &&
+        !probe.isLoginPage &&
         probe.state !== 'PAGE_OUTDATED_NEEDS_RELOAD' &&
         probe.state !== 'LOADING' &&
         probe.state !== 'UNKNOWN'
       ) {
+        hasSyncedValidStatus = true;
         await postProbe(probe);
         return probe;
       }
     }
 
     const cookieProbe = await fetchAttendanceFromCookies();
-    if (cookieProbe) {
+    if (cookieProbe && !cookieProbe.isLoginPage) {
+      hasSyncedValidStatus = true;
       await postProbe(cookieProbe);
       return cookieProbe;
     }
 
-    const loginTab = tabs.find((t) => isLoginUrl(t.url));
-    if (loginTab) {
-      const loginProbe = { isLoginPage: true, url: loginTab.url || TARGET_ATTENDANCE_URL };
-      await postProbe(loginProbe);
-      return loginProbe;
+    if (!hasSyncedValidStatus) {
+      const loginTab = tabs.find((t) => isLoginUrl(t.url));
+      if (loginTab) {
+        const loginProbe = { isLoginPage: true, url: loginTab.url || TARGET_ATTENDANCE_URL };
+        await postProbe(loginProbe);
+        return loginProbe;
+      }
     }
 
     return null;
