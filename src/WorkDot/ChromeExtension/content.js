@@ -1114,6 +1114,204 @@
     };
   };
 
+  const AUTO_LOGIN_STORAGE_KEY = 'workdotAutoLogin';
+  const MANUAL_LOGOUT_TS_KEY = 'workdot_manual_logout_ts';
+  const AUTO_LOGIN_LAST_TS_KEY = 'workdot_auto_login_last_ts';
+  let autoLoginInFlight = false;
+
+  const isVisibleElement = (el) => {
+    if (!el) return false;
+    try {
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+        return false;
+      }
+      return el.offsetParent !== null || el.getBoundingClientRect().height > 0;
+    } catch {
+      return Boolean(el.offsetParent);
+    }
+  };
+
+  const getAutoLoginConfig = () =>
+    new Promise((resolve) => {
+      try {
+        if (!chrome.storage?.local) {
+          resolve(null);
+          return;
+        }
+        chrome.storage.local.get([AUTO_LOGIN_STORAGE_KEY], (result) => {
+          if (chrome.runtime.lastError) {
+            resolve(null);
+            return;
+          }
+          resolve(result?.[AUTO_LOGIN_STORAGE_KEY] || null);
+        });
+      } catch {
+        resolve(null);
+      }
+    });
+
+  const findLoginFormInputs = () => {
+    const hasEhrAttendUi = Boolean(
+      document.querySelector('.lnb_gadget.gadget_attend, .attend_card, #timelineClock, .wrap_today_time')
+    );
+    if (hasEhrAttendUi) return null;
+
+    const passCandidates = Array.from(
+      document.querySelectorAll('input[type="password"], #password, input[name="password"]')
+    );
+    const passInput = passCandidates.find((el) => isVisibleElement(el));
+    if (!passInput) return null;
+
+    const userCandidates = Array.from(
+      document.querySelectorAll(
+        '#username, #userId, #loginId, input[name="username"], input[name="userId"], input[type="text"], input[type="email"]'
+      )
+    );
+    const userInput = userCandidates.find((el) => el !== passInput && isVisibleElement(el));
+    if (!userInput) return null;
+
+    return { userInput, passInput };
+  };
+
+  const hasLoginErrorOrCaptcha = () => {
+    const captchaEl = document.querySelector(
+      'input[name*="captcha" i], input[id*="captcha" i], img[src*="captcha" i], #captcha, .captcha'
+    );
+    if (captchaEl && isVisibleElement(captchaEl)) {
+      return true;
+    }
+
+    const errorSelectors =
+      '.error, .alert, .msg_error, .login_error, .txt_error, .err_msg, .go_alert, .layer_alert, .notice_msg, [role="alert"]';
+    const errNodes = Array.from(document.querySelectorAll(errorSelectors));
+    const errPattern = /(일치하지|실패|틀렸|잘못|잠금|잠겼|만료|오류|보안문자|초과|제한|불일치|확인해\s*주세요)/;
+    for (const node of errNodes) {
+      if (!isVisibleElement(node)) continue;
+      const txt = clean(node.innerText);
+      if (txt && errPattern.test(txt)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const setNativeInputValue = (el, val) => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+    if (setter) setter.call(el, val);
+    else el.value = val;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+
+  const tryAutoLoginAsync = async (force = false) => {
+    if (autoLoginInFlight) return { ok: false, reason: 'IN_FLIGHT' };
+    autoLoginInFlight = true;
+
+    try {
+      const cfg = await getAutoLoginConfig();
+      if (!cfg || !cfg.enabled || !cfg.username || !cfg.password) {
+        return { ok: false, reason: 'DISABLED' };
+      }
+
+      const inputs = findLoginFormInputs();
+      if (!inputs) {
+        return { ok: false, reason: 'NO_FORM' };
+      }
+
+      const now = Date.now();
+      let manualLogoutTs = 0;
+      let lastAttemptTs = 0;
+      try {
+        manualLogoutTs = Number(sessionStorage.getItem(MANUAL_LOGOUT_TS_KEY) || '0');
+        lastAttemptTs = Number(sessionStorage.getItem(AUTO_LOGIN_LAST_TS_KEY) || '0');
+      } catch {}
+
+      if (!force) {
+        if (manualLogoutTs > 0 && now - manualLogoutTs < 60000) {
+          return { ok: false, reason: 'MANUAL_LOGOUT_COOLDOWN' };
+        }
+        if (lastAttemptTs > 0 && now - lastAttemptTs < 15000) {
+          return { ok: false, reason: 'ATTEMPT_COOLDOWN' };
+        }
+      } else {
+        if (lastAttemptTs > 0 && now - lastAttemptTs < 3000) {
+          return { ok: false, reason: 'FORCE_DEBOUNCE' };
+        }
+      }
+
+      if (hasLoginErrorOrCaptcha()) {
+        return { ok: false, reason: 'ERROR_OR_CAPTCHA' };
+      }
+
+      setNativeInputValue(inputs.userInput, cfg.username);
+      setNativeInputValue(inputs.passInput, cfg.password);
+
+      try {
+        sessionStorage.setItem(AUTO_LOGIN_LAST_TS_KEY, String(Date.now()));
+        if (force) {
+          sessionStorage.removeItem(MANUAL_LOGOUT_TS_KEY);
+        }
+      } catch {}
+
+      if (cfg.autoSubmit === false) {
+        try {
+          inputs.passInput.focus();
+        } catch {}
+        return { ok: true, status: 'FILLED_ONLY' };
+      }
+
+      await sleep(120);
+
+      const loginBtn = document.querySelector(
+        '#login_submit, #btnLogin, .btn_login, button[type="submit"], input[type="submit"], a.btn_login'
+      );
+      if (loginBtn && isVisibleElement(loginBtn)) {
+        loginBtn.click();
+        return { ok: true, status: 'SUBMITTED' };
+      }
+
+      const candidates = Array.from(document.querySelectorAll('button, a, span, div[role="button"]'));
+      for (const c of candidates) {
+        if (isVisibleElement(c) && clean(c.innerText) === '로그인') {
+          c.click();
+          return { ok: true, status: 'SUBMITTED_TEXT' };
+        }
+      }
+
+      const form = inputs.passInput.closest('form');
+      if (form) {
+        form.submit();
+        return { ok: true, status: 'FORM_SUBMITTED' };
+      }
+
+      return { ok: true, status: 'FILLED_NO_BTN' };
+    } finally {
+      autoLoginInFlight = false;
+    }
+  };
+
+  // 사용자가 직접 로그아웃을 클릭한 경우 즉시 재로그인되지 않도록 60초 쿨다운 기록
+  document.addEventListener(
+    'click',
+    (e) => {
+      try {
+        const target = e.target?.closest?.('a, button, span, li, div[role="button"]');
+        if (!target) return;
+        const href = (target.getAttribute?.('href') || '').toLowerCase();
+        const text = clean(target.innerText);
+        if (
+          href.includes('logout') ||
+          target.classList?.contains('btn_logout') ||
+          text === '로그아웃'
+        ) {
+          sessionStorage.setItem(MANUAL_LOGOUT_TS_KEY, String(Date.now()));
+        }
+      } catch {}
+    },
+    true
+  );
+
   try {
     chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (!msg || typeof msg !== 'object') return false;
@@ -1135,6 +1333,13 @@
         return true;
       }
 
+      if (msg.type === 'WORKDOT_TRY_AUTO_LOGIN') {
+        tryAutoLoginAsync(Boolean(msg.force))
+          .then((res) => sendResponse(res))
+          .catch(() => sendResponse({ ok: false, reason: 'ERROR' }));
+        return true;
+      }
+
       return false;
     });
   } catch {}
@@ -1145,5 +1350,11 @@
       obs.observe(document.body, { childList: true, subtree: true, characterData: true });
     }
     scheduleProbe(700);
+    setTimeout(() => {
+      tryAutoLoginAsync(false);
+    }, 450);
+    setTimeout(() => {
+      tryAutoLoginAsync(false);
+    }, 1300);
   });
 })();

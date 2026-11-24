@@ -16,12 +16,17 @@ public sealed record BridgeCommandResult(
     string? ProbeJson = null);
 
 /// <summary>
-/// Chrome/Edge 확장프로그램과 Windows 위젯 간 로컬 루프백(127.0.0.1:49812) HTTP JSON 통신 브릿지 서버입니다.
-/// 관리자 권한이나 방화벽 예외 없이 동작하며, 브라우저의 기존 다우오피스 로그인 세션을 그대로 연동합니다.
+/// Chrome/Edge 확장프로그램과 Windows 위젯 간 로컬 루프백(127.0.0.1) HTTP JSON 통신 브릿지 서버입니다.
+/// Windows WSL2/Hyper-V 예약 포트 대역(49152~65535) 충돌을 피하기 위해 안전 대역(38912 등) 다중 폴백 포트를 사용합니다.
 /// </summary>
 public sealed class ChromeExtensionBridgeService : IDisposable
 {
-    public const int PrimaryPort = 49812;
+    public const int PrimaryPort = 38912;
+
+    /// <summary>
+    /// Windows 동적 예약 포트 대역(49152~65535) 바깥의 안전 대역 우선 + 구버전 호환(49812) 폴백 포트 목록
+    /// </summary>
+    public static readonly int[] CandidatePorts = [38912, 41812, 45812, 49812];
 
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
     private static readonly TimeSpan ConnectedWindow = TimeSpan.FromSeconds(35);
@@ -99,24 +104,29 @@ public sealed class ChromeExtensionBridgeService : IDisposable
 
         _cts = new CancellationTokenSource();
 
-        // 기존 프로세스 종료 직후 TIME_WAIT 상태여도 단일 포트(49812)로 즉시 재바인딩하도록 ReuseAddress + 재시도 적용
-        for (int attempt = 0; attempt < 5; attempt++)
+        // WSL2/Hyper-V 예약 포트(excludedportrange) 또는 타 프로세스 점유 시 다음 안전 대역 포트로 자동 폴백
+        for (int round = 0; round < 2 && _listener == null; round++)
         {
-            try
+            foreach (int port in CandidatePorts)
             {
-                var listener = new TcpListener(IPAddress.Loopback, PrimaryPort);
-                listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                listener.Start();
-                _listener = listener;
-                ActivePort = PrimaryPort;
-                break;
-            }
-            catch (SocketException)
-            {
-                if (attempt < 4)
+                try
                 {
-                    Thread.Sleep(200);
+                    var listener = new TcpListener(IPAddress.Loopback, port);
+                    listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                    listener.Start();
+                    _listener = listener;
+                    ActivePort = port;
+                    break;
                 }
+                catch (SocketException)
+                {
+                    // 예약 포트(AccessDenied) 또는 점유 중(AddressAlreadyInUse) -> 다음 후보 포트로 이동
+                }
+            }
+
+            if (_listener == null && round == 0)
+            {
+                Thread.Sleep(250);
             }
         }
 
@@ -398,7 +408,9 @@ public sealed class ChromeExtensionBridgeService : IDisposable
             "Access-Control-Allow-Origin: *\r\n" +
             "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
             "Access-Control-Allow-Headers: Content-Type, Access-Control-Request-Private-Network\r\n" +
+            "Access-Control-Expose-Headers: X-WorkDot-Bridge\r\n" +
             "Access-Control-Allow-Private-Network: true\r\n" +
+            "X-WorkDot-Bridge: 1\r\n" +
             "Cache-Control: no-store\r\n" +
             "Connection: close\r\n\r\n";
 

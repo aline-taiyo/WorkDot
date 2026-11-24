@@ -1,7 +1,7 @@
 const DAOU_ORIGIN = 'https://alinestudio.daouoffice.com';
 const TARGET_ATTENDANCE_URL = `${DAOU_ORIGIN}/ehr/app/attend/my-attendance-status`;
 const GADGET_TODAY_API = `${DAOU_ORIGIN}/api/attend/normal/gadget/today`;
-const BRIDGE_PORTS = [49812];
+const BRIDGE_PORTS = [38912, 41812, 45812, 49812];
 const POLL_COMMAND_MS = 2000;
 const SYNC_INTERVAL_MS = 15000;
 const KEEPALIVE_INTERVAL_MS = 20000;
@@ -112,10 +112,20 @@ async function bridgeFetch(path, options = {}) {
 
   for (const port of portsToTry) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+      const fetchOpts = {
         ...options,
         cache: 'no-store'
-      });
+      };
+      if (!fetchOpts.signal && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        fetchOpts.signal = AbortSignal.timeout(3000);
+      }
+
+      const res = await fetch(`http://127.0.0.1:${port}${path}`, fetchOpts);
+      if (res.headers.get('X-WorkDot-Bridge') !== '1') {
+        lastErr = new Error(`Port ${port} is not WorkDot Bridge`);
+        continue;
+      }
+
       activePort = port;
       return res;
     } catch (err) {
@@ -358,6 +368,9 @@ async function openOrFocusDaouTab() {
 
   if (targetTab && targetTab.id != null) {
     await focusTab(targetTab);
+    if (isLoginUrl(targetTab.url)) {
+      await sendMessageToTabSafe(targetTab.id, { type: 'WORKDOT_TRY_AUTO_LOGIN', force: true });
+    }
   } else {
     const created = await chrome.tabs.create({ url: TARGET_ATTENDANCE_URL, active: true });
     if (created?.windowId != null) {
@@ -397,6 +410,9 @@ async function handleClockAction(cmd) {
     const loginTab = tabs.find((t) => isLoginUrl(t.url));
     if (loginTab) {
       await focusTab(loginTab);
+      if (loginTab.id != null) {
+        await sendMessageToTabSafe(loginTab.id, { type: 'WORKDOT_TRY_AUTO_LOGIN', force: true });
+      }
       const loginProbe = { isLoginPage: true, url: loginTab.url };
       await postProbe(loginProbe);
       await postCommandResult({
@@ -603,6 +619,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg?.type === 'WORKDOT_OPEN_DAOU') {
     openOrFocusDaouTab().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (msg?.type === 'WORKDOT_TRIGGER_AUTOLOGIN_ON_ACTIVE') {
+    (async () => {
+      const tabs = await queryDaouTabs();
+      const loginTab = tabs.find((t) => isLoginUrl(t.url));
+      if (loginTab && loginTab.id != null) {
+        await sendMessageToTabSafe(loginTab.id, { type: 'WORKDOT_TRY_AUTO_LOGIN', force: true });
+      }
+      sendResponse({ ok: true });
+    })();
     return true;
   }
   return false;
