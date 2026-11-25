@@ -1183,9 +1183,9 @@
     }
 
     const errorSelectors =
-      '.error, .alert, .msg_error, .login_error, .txt_error, .err_msg, .go_alert, .layer_alert, .notice_msg, [role="alert"]';
+      '.error, .alert, .msg_error, .login_error, .txt_error, .err_msg, .go_alert, .layer_alert, [role="alert"]';
     const errNodes = Array.from(document.querySelectorAll(errorSelectors));
-    const errPattern = /(일치하지|실패|틀렸|잘못|잠금|잠겼|만료|오류|보안문자|초과|제한|불일치|확인해\s*주세요)/;
+    const errPattern = /(일치하지|틀렸|로그인\s*실패|인증\s*실패|잠금|잠겼|보안문자|횟수\s*초과|계정.*제한|불일치)/;
     for (const node of errNodes) {
       if (!isVisibleElement(node)) continue;
       const txt = clean(node.innerText);
@@ -1344,7 +1344,7 @@
     });
   } catch {}
 
-  window.addEventListener('DOMContentLoaded', () => {
+  const onPageReady = () => {
     if (document.body) {
       const obs = new MutationObserver(() => scheduleProbe(500));
       obs.observe(document.body, { childList: true, subtree: true, characterData: true });
@@ -1352,9 +1352,15 @@
     scheduleProbe(700);
     setTimeout(() => {
       tryAutoLoginAsync(false);
-    }, 450);
+    }, 350);
     setTimeout(() => {
       tryAutoLoginAsync(false);
-    }, 1300);
-  });
+    }, 1200);
+  };
+
+  if (document.readyState === 'loading') {
+    window.addEventListener('DOMContentLoaded', onPageReady);
+  } else {
+    onPageReady();
+  }
 })();

@@ -1,7 +1,7 @@
 (() => {
   const AUTO_LOGIN_STORAGE_KEY = 'workdotAutoLogin';
   const manifest = chrome.runtime.getManifest();
-  const currentVersion = manifest?.version || '2.0.4';
+  const currentVersion = manifest?.version || '2.0.5';
 
   const appNameEl = document.getElementById('app-name');
   const appVersionEl = document.getElementById('app-version');

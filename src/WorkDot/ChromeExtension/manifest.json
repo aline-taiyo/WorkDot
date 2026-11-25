@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WorkDot DaouOffice Bridge",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "description": "WorkDot 윈도우 위젯과 크롬 다우오피스 로그인 세션을 연결하는 브릿지 확장프로그램",
   "icons": {
     "16": "icon.png",

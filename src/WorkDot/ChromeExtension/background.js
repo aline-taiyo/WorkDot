@@ -398,6 +398,16 @@ async function openOrFocusDaouTab() {
           await chrome.windows.update(created.windowId, { focused: true });
         } catch {}
       }
+      if (created?.id != null) {
+        // 새 탭이 로그인 페이지로 리다이렉트될 경우 즉시 자동 로그인(force: true) 트리거
+        (async () => {
+          const loaded = await waitForTabComplete(created.id, 12000);
+          if (loaded && isLoginUrl(getTabUrl(loaded))) {
+            await sleep(250);
+            await sendMessageToTabSafe(created.id, { type: 'WORKDOT_TRY_AUTO_LOGIN', force: true });
+          }
+        })().catch(() => {});
+      }
     }
   } finally {
     isOpeningPortalTab = false;
@@ -700,6 +710,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     }
     if (changeInfo.status === 'complete' && isAttendanceCapableUrl(tab.url)) {
       setTimeout(() => syncAttendance(false), 600);
+    }
+    if (changeInfo.status === 'complete' && isLoginUrl(tab.url)) {
+      setTimeout(() => {
+        sendMessageToTabSafe(tabId, { type: 'WORKDOT_TRY_AUTO_LOGIN', force: false }).catch(() => {});
+      }, 300);
     }
   }
 });
