@@ -7,7 +7,7 @@ using System.Text.Json;
 
 namespace WorkDot.Services;
 
-public sealed record BridgeCommand(string Id, string Action);
+public sealed record BridgeCommand(string Id, string Action, DateTime ExpiresUtc);
 
 public sealed record BridgeCommandResult(
     bool Success,
@@ -33,6 +33,7 @@ public sealed class ChromeExtensionBridgeService : IDisposable
 
     private readonly ConcurrentQueue<BridgeCommand> _commandQueue = new();
     private readonly ConcurrentDictionary<string, TaskCompletionSource<BridgeCommandResult>> _pendingResults = new();
+    private readonly ConcurrentDictionary<string, byte> _cancelledCommandIds = new();
 
     private CancellationTokenSource? _cts;
     private TcpListener? _listener;
@@ -141,26 +142,28 @@ public sealed class ChromeExtensionBridgeService : IDisposable
         if (string.IsNullOrWhiteSpace(action))
             return;
 
-        if (action == "REFRESH" && _commandQueue.Any(c => c.Action == "REFRESH"))
+        if (action == "REFRESH" && _commandQueue.Any(c => c.Action == "REFRESH" && c.ExpiresUtc > DateTime.UtcNow))
             return;
 
-        _commandQueue.Enqueue(new BridgeCommand(Guid.NewGuid().ToString("N"), action));
+        _commandQueue.Enqueue(new BridgeCommand(Guid.NewGuid().ToString("N"), action, DateTime.UtcNow.AddSeconds(15)));
     }
 
     public async Task<BridgeCommandResult> SendCommandAsync(string action, TimeSpan? timeout = null)
     {
         string id = Guid.NewGuid().ToString("N");
+        TimeSpan effectiveTimeout = timeout ?? TimeSpan.FromSeconds(22);
         var tcs = new TaskCompletionSource<BridgeCommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pendingResults[id] = tcs;
-        _commandQueue.Enqueue(new BridgeCommand(id, action));
+        _commandQueue.Enqueue(new BridgeCommand(id, action, DateTime.UtcNow.Add(effectiveTimeout)));
 
-        TimeSpan effectiveTimeout = timeout ?? TimeSpan.FromSeconds(22);
         var completed = await Task.WhenAny(tcs.Task, Task.Delay(effectiveTimeout));
         if (completed == tcs.Task)
         {
             return await tcs.Task;
         }
 
+        // 타임아웃된 명령이 큐에 남아 있다가 브라우저 실행 직후 뒤늦게 실행(중복 탭 오픈 등)되지 않도록 즉시 취소 마킹
+        _cancelledCommandIds[id] = 1;
         _pendingResults.TryRemove(id, out _);
         return new BridgeCommandResult(false, false, "크롬 확장프로그램 응답 시간이 초과되었습니다.");
     }
@@ -245,9 +248,23 @@ public sealed class ChromeExtensionBridgeService : IDisposable
                 {
                     MarkExtensionSeen();
                     string appVersion = AppSettingsService.AppVersion.TrimStart('v', 'V');
-                    if (_commandQueue.TryDequeue(out BridgeCommand? cmd))
+                    BridgeCommand? validCmd = null;
+                    DateTime nowUtc = DateTime.UtcNow;
+
+                    while (_commandQueue.TryDequeue(out BridgeCommand? candidate))
                     {
-                        string json = JsonSerializer.Serialize(new { id = cmd.Id, action = cmd.Action, version = appVersion });
+                        if (_cancelledCommandIds.TryRemove(candidate.Id, out _))
+                            continue;
+                        if (nowUtc > candidate.ExpiresUtc)
+                            continue;
+
+                        validCmd = candidate;
+                        break;
+                    }
+
+                    if (validCmd != null)
+                    {
+                        string json = JsonSerializer.Serialize(new { id = validCmd.Id, action = validCmd.Action, version = appVersion });
                         await WriteHttpResponseAsync(stream, 200, "OK", json);
                     }
                     else

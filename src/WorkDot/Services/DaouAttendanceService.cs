@@ -313,16 +313,28 @@ public sealed class DaouAttendanceService : IDisposable
         }
     }
 
+    private int _isOpeningPortal;
+
     public async Task OpenPortalInBrowserAsync()
     {
-        if (_bridge.IsExtensionConnected)
-        {
-            var result = await _bridge.SendCommandAsync("OPEN_PORTAL", TimeSpan.FromSeconds(5));
-            if (result.Success)
-                return;
-        }
+        if (Interlocked.CompareExchange(ref _isOpeningPortal, 1, 0) != 0)
+            return;
 
-        OpenDefaultBrowserUrl(TargetAttendanceUrl);
+        try
+        {
+            if (_bridge.IsExtensionConnected)
+            {
+                var result = await _bridge.SendCommandAsync("OPEN_PORTAL", TimeSpan.FromSeconds(3));
+                if (result.Success)
+                    return;
+            }
+
+            OpenDefaultBrowserUrl(TargetAttendanceUrl);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _isOpeningPortal, 0);
+        }
     }
 
     public void OpenPortalInBrowser()
@@ -414,7 +426,7 @@ public sealed class DaouAttendanceService : IDisposable
             return (false, "크롬 확장프로그램이 연결되지 않아 브라우저에서 다우오피스를 열었습니다. 확장프로그램을 설치·연결해주세요.");
         }
 
-        BridgeCommandResult res = await _bridge.SendCommandAsync(action, TimeSpan.FromSeconds(22));
+        BridgeCommandResult res = await _bridge.SendCommandAsync(action, TimeSpan.FromSeconds(28));
         if (res.Success)
         {
             return (true, successMessage);

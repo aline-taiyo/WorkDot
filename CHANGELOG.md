@@ -4,6 +4,17 @@ WorkDot의 모든 주요 변경 사항 및 버전별 릴리즈 노트입니다.
 
 ---
 
+## [v2.0.4] - 2026-11-25
+
+### 🐛 버그 수정 (Bug Fixes)
+- **홈 버튼 또는 `Ctrl+Shift+F5` 실행 시 다우오피스 탭이 2개 열리던 버그 수정**:
+  - **만료/타임아웃 명령 폐기 (`ChromeExtensionBridgeService.cs`)**: `OPEN_PORTAL` 명령이 타임아웃되어 기본 브라우저로 탭을 연 뒤, 큐에 남아 있던 만료 명령이 크롬 확장프로그램 기동 시 뒤늦게 실행되어 중복 탭을 열던 레이스 컨디션을 원천 차단했습니다.
+  - **중복 호출 방지 및 로딩 중 탭 감지 (`DaouAttendanceService.cs`, `background.js`)**: `OpenPortalInBrowserAsync` 재진입 가드 및 `openOrFocusDaouTab` 1.2초 디바운스를 추가하고, `queryDaouTabs()`가 아직 로딩 중인 탭의 `pendingUrl`까지 함께 감지하여 기존 탭을 포커스하도록 개선했습니다.
+- **퇴근(로그아웃) 상태에서 롱프레스 출근 시 자동 로그인만 되고 출근 처리가 누락되던 버그 수정**:
+  - **자동 로그인 → 근태 페이지 이동 → 출근 실행 원스톱 연동 (`background.js`, `DaouAttendanceService.cs`)**: 자동 로그인이 활성화된 상태에서 출근/퇴근/휴게 액션 요청 시 로그인 완료와 근태 페이지(`/ehr/app/attend/my-attendance-status`) 로딩을 끝까지 기다린 뒤 요청된 근태 액션까지 연속 실행하도록 수정했으며, 근태 액션 응답 대기 시간을 28초로 여유 있게 확장했습니다.
+
+---
+
 ## [v2.0.3] - 2026-11-24
 
 ### 🚀 신규 기능 및 개선 (Features & Improvements)

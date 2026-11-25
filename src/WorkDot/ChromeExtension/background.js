@@ -245,11 +245,18 @@ async function fetchAttendanceFromCookies() {
   }
 }
 
+const getTabUrl = (tab) => tab?.url || tab?.pendingUrl || '';
+
 async function queryDaouTabs() {
   try {
-    return await chrome.tabs.query({ url: `${DAOU_ORIGIN}/*` });
+    const allTabs = await chrome.tabs.query({});
+    return allTabs.filter((t) => getTabUrl(t).startsWith(DAOU_ORIGIN));
   } catch {
-    return [];
+    try {
+      return await chrome.tabs.query({ url: `${DAOU_ORIGIN}/*` });
+    } catch {
+      return [];
+    }
   }
 }
 
@@ -359,25 +366,41 @@ async function focusTab(tab) {
   } catch {}
 }
 
-async function openOrFocusDaouTab() {
-  const tabs = await queryDaouTabs();
-  const targetTab =
-    tabs.find((t) => (t.url || '').includes('/ehr/app/attend')) ||
-    tabs.find((t) => (t.url || '').includes('/home')) ||
-    tabs.find((t) => isLoginUrl(t.url));
+let isOpeningPortalTab = false;
+let lastOpenPortalTs = 0;
 
-  if (targetTab && targetTab.id != null) {
-    await focusTab(targetTab);
-    if (isLoginUrl(targetTab.url)) {
-      await sendMessageToTabSafe(targetTab.id, { type: 'WORKDOT_TRY_AUTO_LOGIN', force: true });
+async function openOrFocusDaouTab() {
+  const now = Date.now();
+  if (isOpeningPortalTab || now - lastOpenPortalTs < 1200) {
+    return;
+  }
+  isOpeningPortalTab = true;
+  lastOpenPortalTs = now;
+
+  try {
+    const tabs = await queryDaouTabs();
+    const targetTab =
+      tabs.find((t) => getTabUrl(t).includes('/ehr/app/attend')) ||
+      tabs.find((t) => getTabUrl(t).includes('/ehr/')) ||
+      tabs.find((t) => getTabUrl(t).includes('/home')) ||
+      tabs.find((t) => isLoginUrl(getTabUrl(t))) ||
+      tabs[0];
+
+    if (targetTab && targetTab.id != null) {
+      await focusTab(targetTab);
+      if (isLoginUrl(getTabUrl(targetTab))) {
+        await sendMessageToTabSafe(targetTab.id, { type: 'WORKDOT_TRY_AUTO_LOGIN', force: true });
+      }
+    } else {
+      const created = await chrome.tabs.create({ url: TARGET_ATTENDANCE_URL, active: true });
+      if (created?.windowId != null) {
+        try {
+          await chrome.windows.update(created.windowId, { focused: true });
+        } catch {}
+      }
     }
-  } else {
-    const created = await chrome.tabs.create({ url: TARGET_ATTENDANCE_URL, active: true });
-    if (created?.windowId != null) {
-      try {
-        await chrome.windows.update(created.windowId, { focused: true });
-      } catch {}
-    }
+  } finally {
+    isOpeningPortalTab = false;
   }
 }
 
@@ -390,6 +413,73 @@ async function handleOpenPortal(cmd) {
     needsLogin: false,
     message: '브라우저에서 다우오피스를 열었습니다.'
   });
+}
+
+const AUTO_LOGIN_STORAGE_KEY = 'workdotAutoLogin';
+
+async function isAutoLoginReady() {
+  try {
+    if (!chrome.storage?.local) return false;
+    const res = await new Promise((resolve) => {
+      chrome.storage.local.get([AUTO_LOGIN_STORAGE_KEY], (r) => resolve(r || {}));
+    });
+    const cfg = res?.[AUTO_LOGIN_STORAGE_KEY];
+    return Boolean(cfg && cfg.enabled && cfg.autoSubmit !== false && cfg.username && cfg.password);
+  } catch {
+    return false;
+  }
+}
+
+async function tryAutoLoginAndReachAttendanceTab(tab) {
+  if (!tab || tab.id == null) return null;
+  if (!(await isAutoLoginReady())) return null;
+
+  const tabId = tab.id;
+  await sendMessageToTabSafe(tabId, { type: 'WORKDOT_TRY_AUTO_LOGIN', force: true });
+
+  const loginDeadline = Date.now() + 12000;
+  let currentTab = tab;
+  let loggedIn = false;
+
+  while (Date.now() < loginDeadline) {
+    await sleep(400);
+    try {
+      currentTab = await chrome.tabs.get(tabId);
+    } catch {
+      return null;
+    }
+    const url = getTabUrl(currentTab);
+    if (url && url.startsWith(DAOU_ORIGIN) && !isLoginUrl(url)) {
+      loggedIn = true;
+      break;
+    }
+  }
+
+  if (!loggedIn) return null;
+
+  currentTab = (await waitForTabComplete(tabId, 8000)) || currentTab;
+  const afterUrl = getTabUrl(currentTab);
+  if (isLoginUrl(afterUrl)) return null;
+
+  if (!afterUrl.includes('/ehr/app/attend')) {
+    try {
+      await chrome.tabs.update(tabId, { url: TARGET_ATTENDANCE_URL });
+      currentTab = (await waitForTabComplete(tabId, 10000)) || currentTab;
+    } catch {
+      return null;
+    }
+  }
+
+  const uiDeadline = Date.now() + 4500;
+  while (Date.now() < uiDeadline) {
+    await sleep(450);
+    const probe = await sendMessageToTabSafe(tabId, { type: 'WORKDOT_RUN_PROBE' });
+    if (probe && !probe.isLoginPage && probe.state !== 'LOADING' && probe.state !== 'UNKNOWN') {
+      break;
+    }
+  }
+
+  return currentTab;
 }
 
 async function handleClockAction(cmd) {
@@ -407,29 +497,34 @@ async function handleClockAction(cmd) {
   }
 
   if (!tab || tab.id == null) {
-    const loginTab = tabs.find((t) => isLoginUrl(t.url));
+    const loginTab = tabs.find((t) => isLoginUrl(getTabUrl(t)));
     if (loginTab) {
-      await focusTab(loginTab);
-      if (loginTab.id != null) {
-        await sendMessageToTabSafe(loginTab.id, { type: 'WORKDOT_TRY_AUTO_LOGIN', force: true });
+      const readyTab = await tryAutoLoginAndReachAttendanceTab(loginTab);
+      if (readyTab && readyTab.id != null) {
+        tab = readyTab;
+      } else {
+        await focusTab(loginTab);
+        if (loginTab.id != null) {
+          await sendMessageToTabSafe(loginTab.id, { type: 'WORKDOT_TRY_AUTO_LOGIN', force: true });
+        }
+        const loginProbe = { isLoginPage: true, url: getTabUrl(loginTab) };
+        await postProbe(loginProbe);
+        await postCommandResult({
+          id: cmd.id,
+          success: false,
+          needsLogin: true,
+          message: '크롬에서 다우오피스 로그인이 필요합니다.',
+          probe: loginProbe
+        });
+        return;
       }
-      const loginProbe = { isLoginPage: true, url: loginTab.url };
-      await postProbe(loginProbe);
-      await postCommandResult({
-        id: cmd.id,
-        success: false,
-        needsLogin: true,
-        message: '크롬에서 다우오피스 로그인이 필요합니다.',
-        probe: loginProbe
-      });
-      return;
-    }
-
-    createdTempTab = true;
-    tab = await chrome.tabs.create({ url: TARGET_ATTENDANCE_URL, active: false });
-    if (tab?.id != null) {
-      tab = await waitForTabComplete(tab.id, 15000);
-      await sleep(1500);
+    } else {
+      createdTempTab = true;
+      tab = await chrome.tabs.create({ url: TARGET_ATTENDANCE_URL, active: false });
+      if (tab?.id != null) {
+        tab = await waitForTabComplete(tab.id, 15000);
+        await sleep(1500);
+      }
     }
   }
 
@@ -443,18 +538,23 @@ async function handleClockAction(cmd) {
     return;
   }
 
-  if (isLoginUrl(tab.url)) {
-    await focusTab(tab);
-    const loginProbe = { isLoginPage: true, url: tab.url };
-    await postProbe(loginProbe);
-    await postCommandResult({
-      id: cmd.id,
-      success: false,
-      needsLogin: true,
-      message: '크롬에서 다우오피스 로그인이 필요합니다.',
-      probe: loginProbe
-    });
-    return;
+  if (isLoginUrl(getTabUrl(tab))) {
+    const readyTab = await tryAutoLoginAndReachAttendanceTab(tab);
+    if (readyTab && readyTab.id != null) {
+      tab = readyTab;
+    } else {
+      await focusTab(tab);
+      const loginProbe = { isLoginPage: true, url: getTabUrl(tab) };
+      await postProbe(loginProbe);
+      await postCommandResult({
+        id: cmd.id,
+        success: false,
+        needsLogin: true,
+        message: '크롬에서 다우오피스 로그인이 필요합니다.',
+        probe: loginProbe
+      });
+      return;
+    }
   }
 
   await ensureMainWorldHook(tab.id);
